@@ -1,4 +1,4 @@
-# app.py - Admin-Only License Server with Hardware ID Support
+# app.py - Admin-Only License Server with Hardware ID Support - Enhanced Security
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 import hashlib
 import json
@@ -18,6 +18,25 @@ ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
 # Database setup
 DATABASE = 'licenses.db'
+
+def get_real_ip():
+    """Get the real client IP address, handling proxies."""
+    # Try various headers that proxies/load balancers use
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs, first one is the original client
+        return forwarded_for.split(',')[0].strip()
+    
+    real_ip = request.headers.get('X-Real-IP')
+    if real_ip:
+        return real_ip
+    
+    forwarded = request.headers.get('X-Forwarded')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    
+    # Fallback to request.remote_addr
+    return request.remote_addr or 'unknown'
 
 def init_db():
     """Initialize the license database."""
@@ -44,7 +63,9 @@ def init_db():
             hardware_id TEXT,
             timestamp TEXT,
             status TEXT,
-            ip_address TEXT
+            ip_address TEXT,
+            user_agent TEXT,
+            details TEXT
         )
     ''')
     conn.commit()
@@ -59,6 +80,26 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+def log_validation_attempt(license_key, hardware_id, status, details=None):
+    """Log a validation attempt with enhanced information."""
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address, user_agent, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                license_key, 
+                hardware_id, 
+                datetime.now().isoformat(), 
+                status, 
+                get_real_ip(),
+                request.headers.get('User-Agent', 'Unknown'),
+                details
+            ))
+            conn.commit()
+    except Exception as e:
+        print(f"Failed to log validation attempt: {e}")
 
 def generate_license_key():
     """Generate a unique license key."""
@@ -99,84 +140,97 @@ def require_admin():
 
 @app.route('/api/validate', methods=['POST'])
 def validate_license():
-    """Validate a license key from the desktop application."""
+    """Validate a license key from the desktop application - Enhanced Security."""
     try:
         data = request.get_json()
         license_key = data.get('license_key')
         hardware_id = data.get('hardware_id')
         
         if not license_key:
+            log_validation_attempt('', hardware_id, 'MISSING_KEY', 'No license key provided')
             return jsonify({
                 "valid": False,
                 "reason": "Missing license key"
             }), 400
         
+        if not hardware_id:
+            log_validation_attempt(license_key, '', 'MISSING_HARDWARE_ID', 'No hardware ID provided')
+            return jsonify({
+                "valid": False,
+                "reason": "Missing hardware ID"
+            }), 400
+        
         with get_db() as conn:
             license_row = conn.execute(
-                'SELECT * FROM licenses WHERE license_key = ? AND active = 1',
+                'SELECT * FROM licenses WHERE license_key = ?',
                 (license_key,)
             ).fetchone()
             
             if not license_row:
-                # Log failed validation
-                conn.execute('''
-                    INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (license_key, hardware_id, datetime.now().isoformat(), 'INVALID_KEY', request.remote_addr))
-                conn.commit()
-                
+                log_validation_attempt(license_key, hardware_id, 'INVALID_KEY', 'License key not found in database')
                 return jsonify({
                     "valid": False,
                     "reason": "Invalid license key"
                 }), 400
             
-            # Check expiration
+            # CRITICAL: Check if license is active (prevent deactivated licenses from working)
+            if not license_row['active']:
+                log_validation_attempt(license_key, hardware_id, 'DEACTIVATED', 'License has been deactivated by admin')
+                return jsonify({
+                    "valid": False,
+                    "reason": "License has been deactivated"
+                }), 400
+            
+            # Check expiration (CRITICAL: Prevent expired licenses from working)
             expiry_date = datetime.fromisoformat(license_row['expiry_date'])
             current_date = datetime.now()
             
             if current_date > expiry_date:
-                # Log expired validation
-                conn.execute('''
-                    INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (license_key, hardware_id, datetime.now().isoformat(), 'EXPIRED', request.remote_addr))
-                conn.commit()
-                
+                log_validation_attempt(license_key, hardware_id, 'EXPIRED', f"License expired on {license_row['expiry_date']}")
                 return jsonify({
                     "valid": False,
                     "reason": "License expired",
                     "expired_date": license_row['expiry_date']
                 }), 400
             
-            # Check hardware binding (if hardware_id was set during license creation)
+            # Check hardware binding (CRITICAL SECURITY)
             if license_row['hardware_id'] and hardware_id:
                 if license_row['hardware_id'] != hardware_id:
-                    # Log hardware mismatch
-                    conn.execute('''
-                        INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (license_key, hardware_id, datetime.now().isoformat(), 'HARDWARE_MISMATCH', request.remote_addr))
-                    conn.commit()
-                    
+                    log_validation_attempt(
+                        license_key, 
+                        hardware_id, 
+                        'HARDWARE_MISMATCH', 
+                        f"Expected: {license_row['hardware_id']}, Got: {hardware_id}"
+                    )
                     return jsonify({
                         "valid": False,
                         "reason": "License not valid for this hardware"
                     }), 400
             
             # Update hardware ID and last used (if not set or if it matches)
-            if not license_row['hardware_id'] or license_row['hardware_id'] == hardware_id:
+            if not license_row['hardware_id']:
+                # First time use - bind to this hardware
                 conn.execute(
                     'UPDATE licenses SET hardware_id = ?, last_used = ? WHERE license_key = ?',
                     (hardware_id, datetime.now().isoformat(), license_key)
                 )
                 conn.commit()
-            
-            # Log successful validation
-            conn.execute('''
-                INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (license_key, hardware_id, datetime.now().isoformat(), 'VALID', request.remote_addr))
-            conn.commit()
+                log_validation_attempt(license_key, hardware_id, 'VALID_FIRST_USE', 'License bound to hardware')
+            elif license_row['hardware_id'] == hardware_id:
+                # Valid hardware match - update last used
+                conn.execute(
+                    'UPDATE licenses SET last_used = ? WHERE license_key = ?',
+                    (datetime.now().isoformat(), license_key)
+                )
+                conn.commit()
+                log_validation_attempt(license_key, hardware_id, 'VALID', 'License validation successful')
+            else:
+                # This should not happen due to earlier check, but just in case
+                log_validation_attempt(license_key, hardware_id, 'SECURITY_ERROR', 'Unexpected hardware mismatch')
+                return jsonify({
+                    "valid": False,
+                    "reason": "Security validation failed"
+                }), 400
             
             days_remaining = (expiry_date - current_date).days
             
@@ -189,10 +243,17 @@ def validate_license():
             })
             
     except Exception as e:
+        # Log server errors for debugging
+        log_validation_attempt(
+            data.get('license_key', '') if 'data' in locals() else '',
+            data.get('hardware_id', '') if 'data' in locals() else '',
+            'SERVER_ERROR',
+            f"Exception: {str(e)}"
+        )
         return jsonify({
             "valid": False,
             "reason": "Server error",
-            "message": str(e)
+            "message": "Internal server error occurred"
         }), 500
 
 @app.route('/check/<license_key>')
@@ -229,7 +290,11 @@ def check_license(license_key):
 @app.route('/health')
 def health_check():
     """Health check endpoint for monitoring."""
-    return jsonify({"status": "healthy"})
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.0.0"
+    })
 
 # =============================================================================
 # ADMIN AUTHENTICATION
@@ -240,7 +305,7 @@ def index():
     """Main page - redirect to admin login."""
     if require_admin():
         return redirect('/admin')
-    return render_template_string(LOGIN_HTML)
+    return render_template_string(LOGIN_HTML, server_ip=get_real_ip())
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -252,7 +317,7 @@ def login():
         session['admin_logged_in'] = True
         return redirect('/admin')
     else:
-        return render_template_string(LOGIN_HTML, error="Invalid credentials")
+        return render_template_string(LOGIN_HTML, error="Invalid credentials", server_ip=get_real_ip())
 
 @app.route('/logout')
 def logout():
@@ -266,7 +331,7 @@ def logout():
 
 @app.route('/admin')
 def admin():
-    """Admin dashboard."""
+    """Admin dashboard with enhanced security information."""
     if not require_admin():
         return redirect('/')
     
@@ -282,21 +347,34 @@ def admin():
             SELECT 
                 COUNT(*) as total_licenses,
                 COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
-                COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses
+                COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses,
+                COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses
             FROM licenses
         ''').fetchone()
         
         recent_validations = conn.execute('''
-            SELECT license_key, hardware_id, timestamp, status, ip_address
+            SELECT license_key, hardware_id, timestamp, status, ip_address, user_agent, details
             FROM validation_logs 
             ORDER BY timestamp DESC 
-            LIMIT 20
+            LIMIT 50
+        ''').fetchall()
+        
+        # Security summary
+        security_stats = conn.execute('''
+            SELECT 
+                status,
+                COUNT(*) as count
+            FROM validation_logs 
+            WHERE timestamp > datetime('now', '-7 days')
+            GROUP BY status
+            ORDER BY count DESC
         ''').fetchall()
     
     return render_template_string(ADMIN_HTML, 
                                 licenses=licenses, 
                                 stats=stats, 
-                                validations=recent_validations)
+                                validations=recent_validations,
+                                security_stats=security_stats)
 
 @app.route('/admin/create', methods=['GET', 'POST'])
 def admin_create_license():
@@ -307,7 +385,7 @@ def admin_create_license():
     if request.method == 'POST':
         customer_email = request.form.get('email')
         customer_name = request.form.get('name')
-        hardware_id = request.form.get('hardware_id')  # NEW: Get hardware_id from form
+        hardware_id = request.form.get('hardware_id')  # Hardware ID from form
         payment_id = request.form.get('payment_id')
         notes = request.form.get('notes')
         
@@ -353,16 +431,20 @@ def extend_license(license_key):
 
 @app.route('/admin/deactivate/<license_key>', methods=['POST'])
 def deactivate_license(license_key):
-    """Deactivate license (admin only)."""
+    """Deactivate license (admin only) - ENHANCED SECURITY."""
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
     
     with get_db() as conn:
+        # Deactivate the license
         conn.execute(
             'UPDATE licenses SET active = 0 WHERE license_key = ?',
             (license_key,)
         )
         conn.commit()
+        
+        # Log the deactivation for audit trail
+        log_validation_attempt(license_key, 'ADMIN', 'DEACTIVATED_BY_ADMIN', f'License manually deactivated by admin from IP: {get_real_ip()}')
     
     return redirect('/admin')
 
@@ -378,11 +460,30 @@ def activate_license(license_key):
             (license_key,)
         )
         conn.commit()
+        
+        # Log the activation for audit trail
+        log_validation_attempt(license_key, 'ADMIN', 'ACTIVATED_BY_ADMIN', f'License manually activated by admin from IP: {get_real_ip()}')
+    
+    return redirect('/admin')
+
+@app.route('/admin/delete/<license_key>', methods=['POST'])
+def delete_license(license_key):
+    """Delete license permanently (admin only) - BE CAREFUL!"""
+    if not require_admin():
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    with get_db() as conn:
+        # Log before deletion
+        log_validation_attempt(license_key, 'ADMIN', 'DELETED_BY_ADMIN', f'License permanently deleted by admin from IP: {get_real_ip()}')
+        
+        # Delete the license
+        conn.execute('DELETE FROM licenses WHERE license_key = ?', (license_key,))
+        conn.commit()
     
     return redirect('/admin')
 
 # =============================================================================
-# HTML TEMPLATES
+# HTML TEMPLATES (Enhanced)
 # =============================================================================
 
 LOGIN_HTML = '''
@@ -401,6 +502,7 @@ LOGIN_HTML = '''
         .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
         .error { color: #e53e3e; margin: 10px 0; padding: 10px; background: #fed7d7; border-radius: 5px; }
         .header { text-align: center; margin-bottom: 30px; }
+        .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
     </style>
 </head>
 <body>
@@ -430,8 +532,9 @@ LOGIN_HTML = '''
             </div>
         </form>
         
-        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 14px;">
-            Admin access only • Authorized personnel only
+        <div class="footer">
+            Admin access only • Authorized personnel only<br>
+            Server IP: {{ server_ip }}
         </div>
     </div>
 </body>
@@ -447,24 +550,29 @@ ADMIN_HTML = '''
         body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
         .header { background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
         .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        th, td { border: 1px solid #e1e5e9; padding: 12px; text-align: left; font-size: 14px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 13px; }
+        th, td { border: 1px solid #e1e5e9; padding: 8px; text-align: left; }
         th { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }
-        .stat-box { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); padding: 25px; border-radius: 15px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .stat-number { font-size: 32px; font-weight: bold; color: #2d3748; margin-bottom: 5px; }
-        .stat-label { color: #4a5568; font-weight: bold; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin: 20px 0; }
+        .stat-box { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); padding: 20px; border-radius: 15px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .stat-number { font-size: 28px; font-weight: bold; color: #2d3748; margin-bottom: 5px; }
+        .stat-label { color: #4a5568; font-weight: bold; font-size: 14px; }
         .expired { color: #e53e3e; font-weight: bold; }
         .active { color: #38a169; font-weight: bold; }
         .inactive { color: #9ca3af; font-weight: bold; }
-        .license-key { font-family: 'Courier New', monospace; background: #f7fafc; padding: 5px 8px; border-radius: 5px; font-size: 12px; }
-        .hardware-id { font-family: 'Courier New', monospace; background: #e6fffa; padding: 5px 8px; border-radius: 5px; font-size: 11px; color: #047857; }
-        .btn { background: #667eea; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; font-size: 12px; margin: 2px; display: inline-block; }
+        .security-error { color: #e53e3e; font-weight: bold; }
+        .valid { color: #38a169; font-weight: bold; }
+        .license-key { font-family: 'Courier New', monospace; background: #f7fafc; padding: 4px 6px; border-radius: 4px; font-size: 11px; }
+        .hardware-id { font-family: 'Courier New', monospace; background: #e6fffa; padding: 4px 6px; border-radius: 4px; font-size: 10px; color: #047857; }
+        .btn { background: #667eea; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 11px; margin: 1px; display: inline-block; border: none; cursor: pointer; }
         .btn-success { background: #38a169; }
         .btn-warning { background: #d69e2e; }
         .btn-danger { background: #e53e3e; }
         .btn:hover { opacity: 0.8; }
         .logout-btn { background: #e53e3e; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+        .security-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 15px 0; }
+        .security-stat { background: #f8f9fa; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #667eea; }
+        .ip-address { font-family: 'Courier New', monospace; background: #fff3cd; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
     </style>
 </head>
 <body>
@@ -493,7 +601,22 @@ ADMIN_HTML = '''
                 <div class="stat-number">{{ stats.valid_licenses }}</div>
                 <div class="stat-label">Valid & Current</div>
             </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.expired_licenses }}</div>
+                <div class="stat-label">Expired</div>
+            </div>
         </div>
+        
+        {% if security_stats %}
+        <h3>📊 Security Events (Last 7 Days)</h3>
+        <div class="security-stats">
+            {% for stat in security_stats %}
+            <div class="security-stat">
+                <strong>{{ stat.status }}:</strong> {{ stat.count }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
         
         <h2>📋 All Licenses</h2>
         <table>
@@ -527,16 +650,21 @@ ADMIN_HTML = '''
                     <td>{{ license.expiry_date[:10] }}</td>
                     <td>
                         {% if license.active %}
-                            <span class="active">● Active</span>
+                            {% set now = moment().isoformat() %}
+                            {% if license.expiry_date < now %}
+                                <span class="expired">● Expired</span>
+                            {% else %}
+                                <span class="active">● Active</span>
+                            {% endif %}
                         {% else %}
-                            <span class="inactive">● Inactive</span>
+                            <span class="inactive">● Deactivated</span>
                         {% endif %}
                     </td>
                     <td>{{ license.last_used[:10] if license.last_used else 'Never' }}</td>
                     <td>
                         {% if license.active %}
                             <form method="POST" action="/admin/deactivate/{{ license.license_key }}" style="display: inline;">
-                                <button type="submit" class="btn btn-danger">Deactivate</button>
+                                <button type="submit" class="btn btn-danger" onclick="return confirm('Deactivate license?')">Deactivate</button>
                             </form>
                         {% else %}
                             <form method="POST" action="/admin/activate/{{ license.license_key }}" style="display: inline;">
@@ -545,6 +673,9 @@ ADMIN_HTML = '''
                         {% endif %}
                         <form method="POST" action="/admin/extend/{{ license.license_key }}" style="display: inline;">
                             <button type="submit" class="btn btn-warning">+30 Days</button>
+                        </form>
+                        <form method="POST" action="/admin/delete/{{ license.license_key }}" style="display: inline;">
+                            <button type="submit" class="btn btn-danger" onclick="return confirm('PERMANENTLY DELETE this license? This cannot be undone!')">Delete</button>
                         </form>
                     </td>
                 </tr>
@@ -561,6 +692,7 @@ ADMIN_HTML = '''
                     <th>Timestamp</th>
                     <th>Status</th>
                     <th>IP Address</th>
+                    <th>Details</th>
                 </tr>
             </thead>
             <tbody>
@@ -568,21 +700,24 @@ ADMIN_HTML = '''
                 <tr>
                     <td><span class="license-key">{{ validation.license_key[:20] }}...</span></td>
                     <td>
-                        {% if validation.hardware_id %}
+                        {% if validation.hardware_id and validation.hardware_id != 'ADMIN' %}
                             <span class="hardware-id">{{ validation.hardware_id }}</span>
                         {% else %}
-                            <span style="color: #999;">N/A</span>
+                            <span style="color: #999;">{{ validation.hardware_id or 'N/A' }}</span>
                         {% endif %}
                     </td>
                     <td>{{ validation.timestamp[:19] }}</td>
                     <td>
-                        {% if validation.status == 'VALID' %}
-                            <span class="active">{{ validation.status }}</span>
+                        {% if validation.status == 'VALID' or validation.status == 'VALID_FIRST_USE' %}
+                            <span class="valid">{{ validation.status }}</span>
+                        {% elif validation.status in ['HARDWARE_MISMATCH', 'EXPIRED', 'DEACTIVATED'] %}
+                            <span class="security-error">{{ validation.status }}</span>
                         {% else %}
                             <span class="expired">{{ validation.status }}</span>
                         {% endif %}
                     </td>
-                    <td>{{ validation.ip_address }}</td>
+                    <td><span class="ip-address">{{ validation.ip_address }}</span></td>
+                    <td style="font-size: 11px; max-width: 200px; word-break: break-word;">{{ validation.details or '-' }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -641,9 +776,9 @@ CREATE_LICENSE_HTML = '''
                     16-character hardware identifier from the client application. Leave empty if unknown - it will be set automatically when the license is first used.
                 </div>
                 <div class="example-box">
-                    <div class="example-title">🎯 For your current request:</div>
-                    Hardware ID: <code style="background: white; padding: 3px 6px; border-radius: 3px;">96CD9965574038B3</code><br>
-                    License Key: <code style="background: white; padding: 3px 6px; border-radius: 3px;">PDFM-THNS-Z2Y3-4NF6</code>
+                    <div class="example-title">💡 How to get Hardware ID:</div>
+                    Customer should run: <code>PDF_Metadata_Tool.exe --hardware-id</code><br>
+                    Or it will be shown when they try to enter a license key.
                 </div>
             </div>
             
@@ -761,6 +896,7 @@ CHECK_RESULT_HTML = '''
         .status-valid { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); color: #2d3748; }
         .status-expired { background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%); color: #2d3748; }
         .status-not-found { background: linear-gradient(135deg, #ffeaa7 0%, #fab1a0 100%); color: #2d3748; }
+        .status-inactive { background: linear-gradient(135deg, #a8a8a8 0%, #d3d3d3 100%); color: #2d3748; }
         .status-box { padding: 30px; border-radius: 15px; margin: 20px 0; text-align: center; }
         .support-info { background: #e3f2fd; padding: 20px; border-radius: 10px; margin-top: 20px; border-left: 4px solid #2196f3; }
     </style>
@@ -783,6 +919,13 @@ CHECK_RESULT_HTML = '''
             <p><strong>License Key:</strong> <code>{{ license_key }}</code></p>
             <p><strong>Expired:</strong> {{ license_info.expiry_date[:10] }}</p>
             <p><strong>Customer:</strong> {{ license_info.customer_email }}</p>
+        </div>
+        {% elif status == 'inactive' %}
+        <div class="status-box status-inactive">
+            <h2>⚠️ License Deactivated</h2>
+            <p><strong>License Key:</strong> <code>{{ license_key }}</code></p>
+            <p><strong>Customer:</strong> {{ license_info.customer_email }}</p>
+            <p>This license has been deactivated by administrator.</p>
         </div>
         {% else %}
         <div class="status-box status-not-found">
