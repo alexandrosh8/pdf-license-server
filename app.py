@@ -336,12 +336,31 @@ def admin():
         return redirect('/')
     
     with get_db() as conn:
-        licenses = conn.execute('''
+        # Get licenses with calculated status
+        licenses_raw = conn.execute('''
             SELECT license_key, hardware_id, customer_email, customer_name, created_date, 
                    expiry_date, active, last_used, notes
             FROM licenses 
             ORDER BY created_date DESC
         ''').fetchall()
+        
+        # Process licenses to add calculated status
+        licenses = []
+        current_time = datetime.now()
+        
+        for license_row in licenses_raw:
+            license_dict = dict(license_row)
+            
+            # Calculate actual status
+            expiry_date = datetime.fromisoformat(license_row['expiry_date'])
+            if not license_row['active']:
+                license_dict['calculated_status'] = 'deactivated'
+            elif current_time > expiry_date:
+                license_dict['calculated_status'] = 'expired'
+            else:
+                license_dict['calculated_status'] = 'active'
+            
+            licenses.append(license_dict)
         
         stats = conn.execute('''
             SELECT 
@@ -649,13 +668,10 @@ ADMIN_HTML = '''
                     <td>{{ license.created_date[:10] }}</td>
                     <td>{{ license.expiry_date[:10] }}</td>
                     <td>
-                        {% if license.active %}
-                            {% set now = moment().isoformat() %}
-                            {% if license.expiry_date < now %}
-                                <span class="expired">● Expired</span>
-                            {% else %}
-                                <span class="active">● Active</span>
-                            {% endif %}
+                        {% if license.calculated_status == 'active' %}
+                            <span class="active">● Active</span>
+                        {% elif license.calculated_status == 'expired' %}
+                            <span class="expired">● Expired</span>
                         {% else %}
                             <span class="inactive">● Deactivated</span>
                         {% endif %}
