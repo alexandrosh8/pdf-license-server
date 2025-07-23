@@ -1,4 +1,4 @@
-# app.py - Admin-Only License Server
+# app.py - Admin-Only License Server with Hardware ID Support
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 import hashlib
 import json
@@ -67,23 +67,24 @@ def generate_license_key():
     
     return f"PDFM-{random_segment()}-{random_segment()}-{random_segment()}"
 
-def create_monthly_license(customer_email, customer_name=None, payment_id=None, notes=None):
-    """Create a new monthly license."""
+def create_monthly_license(customer_email, customer_name=None, hardware_id=None, payment_id=None, notes=None):
+    """Create a new monthly license with optional hardware_id."""
     license_key = generate_license_key()
     created_date = datetime.now()
     expiry_date = created_date + timedelta(days=30)  # Monthly license
     
     with get_db() as conn:
         conn.execute('''
-            INSERT INTO licenses (license_key, customer_email, customer_name, 
+            INSERT INTO licenses (license_key, hardware_id, customer_email, customer_name, 
                                 created_date, expiry_date, payment_id, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (license_key, customer_email, customer_name, 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (license_key, hardware_id, customer_email, customer_name, 
               created_date.isoformat(), expiry_date.isoformat(), payment_id, notes))
         conn.commit()
     
     return {
         'license_key': license_key,
+        'hardware_id': hardware_id,
         'expiry_date': expiry_date.strftime('%Y-%m-%d'),
         'customer_email': customer_email
     }
@@ -147,8 +148,23 @@ def validate_license():
                     "expired_date": license_row['expiry_date']
                 }), 400
             
-            # Update hardware ID and last used
-            if not license_row['hardware_id'] or license_row['hardware_id'] != hardware_id:
+            # Check hardware binding (if hardware_id was set during license creation)
+            if license_row['hardware_id'] and hardware_id:
+                if license_row['hardware_id'] != hardware_id:
+                    # Log hardware mismatch
+                    conn.execute('''
+                        INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (license_key, hardware_id, datetime.now().isoformat(), 'HARDWARE_MISMATCH', request.remote_addr))
+                    conn.commit()
+                    
+                    return jsonify({
+                        "valid": False,
+                        "reason": "License not valid for this hardware"
+                    }), 400
+            
+            # Update hardware ID and last used (if not set or if it matches)
+            if not license_row['hardware_id'] or license_row['hardware_id'] == hardware_id:
                 conn.execute(
                     'UPDATE licenses SET hardware_id = ?, last_used = ? WHERE license_key = ?',
                     (hardware_id, datetime.now().isoformat(), license_key)
@@ -256,7 +272,7 @@ def admin():
     
     with get_db() as conn:
         licenses = conn.execute('''
-            SELECT license_key, customer_email, customer_name, created_date, 
+            SELECT license_key, hardware_id, customer_email, customer_name, created_date, 
                    expiry_date, active, last_used, notes
             FROM licenses 
             ORDER BY created_date DESC
@@ -291,13 +307,19 @@ def admin_create_license():
     if request.method == 'POST':
         customer_email = request.form.get('email')
         customer_name = request.form.get('name')
+        hardware_id = request.form.get('hardware_id')  # NEW: Get hardware_id from form
         payment_id = request.form.get('payment_id')
         notes = request.form.get('notes')
         
         if not customer_email:
             return render_template_string(CREATE_LICENSE_HTML, error="Email is required")
         
-        license_info = create_monthly_license(customer_email, customer_name, payment_id, notes)
+        # Validate hardware_id if provided
+        if hardware_id and len(hardware_id) != 16:
+            return render_template_string(CREATE_LICENSE_HTML, 
+                                        error="Hardware ID must be exactly 16 characters (leave empty if unknown)")
+        
+        license_info = create_monthly_license(customer_email, customer_name, hardware_id, payment_id, notes)
         
         return render_template_string(LICENSE_CREATED_HTML, license_info=license_info)
     
@@ -436,6 +458,7 @@ ADMIN_HTML = '''
         .active { color: #38a169; font-weight: bold; }
         .inactive { color: #9ca3af; font-weight: bold; }
         .license-key { font-family: 'Courier New', monospace; background: #f7fafc; padding: 5px 8px; border-radius: 5px; font-size: 12px; }
+        .hardware-id { font-family: 'Courier New', monospace; background: #e6fffa; padding: 5px 8px; border-radius: 5px; font-size: 11px; color: #047857; }
         .btn { background: #667eea; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; font-size: 12px; margin: 2px; display: inline-block; }
         .btn-success { background: #38a169; }
         .btn-warning { background: #d69e2e; }
@@ -477,6 +500,7 @@ ADMIN_HTML = '''
             <thead>
                 <tr>
                     <th>License Key</th>
+                    <th>Hardware ID</th>
                     <th>Customer</th>
                     <th>Email</th>
                     <th>Created</th>
@@ -490,6 +514,13 @@ ADMIN_HTML = '''
                 {% for license in licenses %}
                 <tr>
                     <td><span class="license-key">{{ license.license_key }}</span></td>
+                    <td>
+                        {% if license.hardware_id %}
+                            <span class="hardware-id">{{ license.hardware_id }}</span>
+                        {% else %}
+                            <span style="color: #999; font-style: italic;">Not Set</span>
+                        {% endif %}
+                    </td>
                     <td>{{ license.customer_name or 'N/A' }}</td>
                     <td>{{ license.customer_email }}</td>
                     <td>{{ license.created_date[:10] }}</td>
@@ -536,7 +567,13 @@ ADMIN_HTML = '''
                 {% for validation in validations %}
                 <tr>
                     <td><span class="license-key">{{ validation.license_key[:20] }}...</span></td>
-                    <td>{{ validation.hardware_id[:16] if validation.hardware_id else 'N/A' }}</td>
+                    <td>
+                        {% if validation.hardware_id %}
+                            <span class="hardware-id">{{ validation.hardware_id }}</span>
+                        {% else %}
+                            <span style="color: #999;">N/A</span>
+                        {% endif %}
+                    </td>
                     <td>{{ validation.timestamp[:19] }}</td>
                     <td>
                         {% if validation.status == 'VALID' %}
@@ -565,12 +602,16 @@ CREATE_LICENSE_HTML = '''
         .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
         .form-group { margin: 20px 0; }
         label { display: block; margin-bottom: 8px; font-weight: bold; color: #333; }
-        input, textarea { width: 100%; padding: 15px; border: 2px solid #e1e5e9; border-radius: 10px; box-sizing: border-box; font-size: 16px; }
+        input, textarea { width: 100%; padding: 15px; border: 2px solid #e1e5e9; border-radius: 10px; box-sizing: border-box; font-size: 16px; font-family: Arial, sans-serif; }
         input:focus, textarea:focus { border-color: #667eea; outline: none; }
+        .hardware-id-input { font-family: 'Courier New', monospace !important; background: #f0fdf4; }
         .btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px 30px; border: none; border-radius: 10px; cursor: pointer; width: 100%; font-size: 18px; font-weight: bold; }
         .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
         .back-link { color: #667eea; text-decoration: none; }
         .error { color: #e53e3e; margin: 10px 0; padding: 10px; background: #fed7d7; border-radius: 5px; }
+        .help-text { font-size: 14px; color: #666; margin-top: 5px; }
+        .example-box { background: #e6fffa; border: 1px solid #4fd1c7; border-radius: 8px; padding: 15px; margin: 10px 0; }
+        .example-title { font-weight: bold; color: #047857; margin-bottom: 8px; }
     </style>
 </head>
 <body>
@@ -590,6 +631,20 @@ CREATE_LICENSE_HTML = '''
             <div class="form-group">
                 <label for="name">👤 Customer Name</label>
                 <input type="text" id="name" name="name" placeholder="Customer Full Name">
+            </div>
+            
+            <div class="form-group">
+                <label for="hardware_id">💻 Hardware ID (Optional)</label>
+                <input type="text" id="hardware_id" name="hardware_id" class="hardware-id-input" 
+                       placeholder="96CD9965574038B3" maxlength="16">
+                <div class="help-text">
+                    16-character hardware identifier from the client application. Leave empty if unknown - it will be set automatically when the license is first used.
+                </div>
+                <div class="example-box">
+                    <div class="example-title">🎯 For your current request:</div>
+                    Hardware ID: <code style="background: white; padding: 3px 6px; border-radius: 3px;">96CD9965574038B3</code><br>
+                    License Key: <code style="background: white; padding: 3px 6px; border-radius: 3px;">PDFM-THNS-Z2Y3-4NF6</code>
+                </div>
             </div>
             
             <div class="form-group">
@@ -623,6 +678,7 @@ LICENSE_CREATED_HTML = '''
         .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
         .success-box { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); border-radius: 15px; color: #2d3748; padding: 30px; margin: 20px 0; text-align: center; }
         .license-key { font-family: 'Courier New', monospace; font-size: 20px; font-weight: bold; background: #2d3748; color: #84fab0; padding: 20px; border-radius: 10px; text-align: center; margin: 20px 0; border: 3px solid #84fab0; letter-spacing: 2px; }
+        .hardware-id { font-family: 'Courier New', monospace; background: #e6fffa; color: #047857; padding: 15px; border-radius: 10px; text-align: center; margin: 10px 0; border: 2px solid #4fd1c7; font-size: 16px; font-weight: bold; }
         .btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 25px; text-decoration: none; border-radius: 25px; display: inline-block; margin: 10px 5px; font-weight: bold; }
         .copy-btn { background: #38a169; }
         .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }
@@ -633,6 +689,12 @@ LICENSE_CREATED_HTML = '''
             const licenseKey = document.getElementById('licenseKey').textContent;
             navigator.clipboard.writeText(licenseKey).then(function() {
                 alert('License key copied to clipboard!');
+            });
+        }
+        function copyHardwareId() {
+            const hardwareId = document.getElementById('hardwareId').textContent;
+            navigator.clipboard.writeText(hardwareId).then(function() {
+                alert('Hardware ID copied to clipboard!');
             });
         }
     </script>
@@ -650,6 +712,14 @@ LICENSE_CREATED_HTML = '''
             <button onclick="copyLicenseKey()" class="btn copy-btn">📋 Copy License Key</button>
         </div>
         
+        {% if license_info.hardware_id %}
+        <h3>💻 Hardware ID:</h3>
+        <div class="hardware-id" id="hardwareId">{{ license_info.hardware_id }}</div>
+        <div style="text-align: center;">
+            <button onclick="copyHardwareId()" class="btn copy-btn">📋 Copy Hardware ID</button>
+        </div>
+        {% endif %}
+        
         <div class="info-grid">
             <div class="info-item">
                 <strong>📧 Customer:</strong><br>{{ license_info.customer_email }}
@@ -665,6 +735,7 @@ LICENSE_CREATED_HTML = '''
             <p style="font-style: italic;">
                 "Your PDF Metadata Tool license is ready!<br><br>
                 License Key: <strong>{{ license_info.license_key }}</strong><br>
+                {% if license_info.hardware_id %}Hardware ID: <strong>{{ license_info.hardware_id }}</strong><br>{% endif %}
                 Valid until: <strong>{{ license_info.expiry_date }}</strong><br><br>
                 Instructions: Run the PDF tool and enter this license key when prompted."
             </p>
