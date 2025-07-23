@@ -335,65 +335,74 @@ def admin():
     if not require_admin():
         return redirect('/')
     
-    with get_db() as conn:
-        # Get licenses with calculated status
-        licenses_raw = conn.execute('''
-            SELECT license_key, hardware_id, customer_email, customer_name, created_date, 
-                   expiry_date, active, last_used, notes
-            FROM licenses 
-            ORDER BY created_date DESC
-        ''').fetchall()
-        
-        # Process licenses to add calculated status
-        licenses = []
-        current_time = datetime.now()
-        
-        for license_row in licenses_raw:
-            license_dict = dict(license_row)
+    try:
+        with get_db() as conn:
+            # Get licenses with calculated status
+            licenses_raw = conn.execute('''
+                SELECT license_key, hardware_id, customer_email, customer_name, created_date, 
+                       expiry_date, active, last_used, notes
+                FROM licenses 
+                ORDER BY created_date DESC
+            ''').fetchall()
             
-            # Calculate actual status
-            expiry_date = datetime.fromisoformat(license_row['expiry_date'])
-            if not license_row['active']:
-                license_dict['calculated_status'] = 'deactivated'
-            elif current_time > expiry_date:
-                license_dict['calculated_status'] = 'expired'
-            else:
-                license_dict['calculated_status'] = 'active'
+            print(f"DEBUG: Found {len(licenses_raw)} licenses in database")
             
-            licenses.append(license_dict)
+            # Process licenses to add calculated status
+            licenses = []
+            current_time = datetime.now()
+            
+            for license_row in licenses_raw:
+                license_dict = dict(license_row)
+                
+                # Calculate actual status
+                expiry_date = datetime.fromisoformat(license_row['expiry_date'])
+                if not license_row['active']:
+                    license_dict['calculated_status'] = 'deactivated'
+                elif current_time > expiry_date:
+                    license_dict['calculated_status'] = 'expired'
+                else:
+                    license_dict['calculated_status'] = 'active'
+                
+                licenses.append(license_dict)
+                print(f"DEBUG: License {license_row['license_key'][:20]}... - Active: {license_row['active']}, Status: {license_dict['calculated_status']}")
+            
+            stats = conn.execute('''
+                SELECT 
+                    COUNT(*) as total_licenses,
+                    COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
+                    COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses,
+                    COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses
+                FROM licenses
+            ''').fetchone()
+            
+            recent_validations = conn.execute('''
+                SELECT license_key, hardware_id, timestamp, status, ip_address, user_agent, details
+                FROM validation_logs 
+                ORDER BY timestamp DESC 
+                LIMIT 50
+            ''').fetchall()
+            
+            # Security summary
+            security_stats = conn.execute('''
+                SELECT 
+                    status,
+                    COUNT(*) as count
+                FROM validation_logs 
+                WHERE timestamp > datetime('now', '-7 days')
+                GROUP BY status
+                ORDER BY count DESC
+            ''').fetchall()
         
-        stats = conn.execute('''
-            SELECT 
-                COUNT(*) as total_licenses,
-                COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
-                COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses,
-                COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses
-            FROM licenses
-        ''').fetchone()
-        
-        recent_validations = conn.execute('''
-            SELECT license_key, hardware_id, timestamp, status, ip_address, user_agent, details
-            FROM validation_logs 
-            ORDER BY timestamp DESC 
-            LIMIT 50
-        ''').fetchall()
-        
-        # Security summary
-        security_stats = conn.execute('''
-            SELECT 
-                status,
-                COUNT(*) as count
-            FROM validation_logs 
-            WHERE timestamp > datetime('now', '-7 days')
-            GROUP BY status
-            ORDER BY count DESC
-        ''').fetchall()
-    
-    return render_template_string(ADMIN_HTML, 
-                                licenses=licenses, 
-                                stats=stats, 
-                                validations=recent_validations,
-                                security_stats=security_stats)
+        return render_template_string(ADMIN_HTML, 
+                                    licenses=licenses, 
+                                    stats=stats, 
+                                    validations=recent_validations,
+                                    security_stats=security_stats)
+    except Exception as e:
+        print(f"ERROR: Admin dashboard failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return f"Database error: {str(e)}", 500
 
 @app.route('/admin/create', methods=['GET', 'POST'])
 def admin_create_license():
@@ -454,18 +463,34 @@ def deactivate_license(license_key):
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
     
-    with get_db() as conn:
-        # Deactivate the license
-        conn.execute(
-            'UPDATE licenses SET active = 0 WHERE license_key = ?',
-            (license_key,)
-        )
-        conn.commit()
+    try:
+        with get_db() as conn:
+            # Check if license exists first
+            existing = conn.execute(
+                'SELECT license_key, active FROM licenses WHERE license_key = ?',
+                (license_key,)
+            ).fetchone()
+            
+            if not existing:
+                print(f"ERROR: License {license_key} not found for deactivation")
+                return jsonify({'error': 'License not found'}), 404
+            
+            # Deactivate the license
+            result = conn.execute(
+                'UPDATE licenses SET active = 0 WHERE license_key = ?',
+                (license_key,)
+            )
+            conn.commit()
+            
+            print(f"SUCCESS: Deactivated license {license_key} (rows affected: {result.rowcount})")
+            
+            # Log the deactivation for audit trail
+            log_validation_attempt(license_key, 'ADMIN', 'DEACTIVATED_BY_ADMIN', f'License manually deactivated by admin from IP: {get_real_ip()}')
         
-        # Log the deactivation for audit trail
-        log_validation_attempt(license_key, 'ADMIN', 'DEACTIVATED_BY_ADMIN', f'License manually deactivated by admin from IP: {get_real_ip()}')
-    
-    return redirect('/admin')
+        return redirect('/admin')
+    except Exception as e:
+        print(f"ERROR: Failed to deactivate license {license_key}: {str(e)}")
+        return jsonify({'error': f'Failed to deactivate license: {str(e)}'}), 500
 
 @app.route('/admin/activate/<license_key>', methods=['POST'])
 def activate_license(license_key):
@@ -473,17 +498,34 @@ def activate_license(license_key):
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
     
-    with get_db() as conn:
-        conn.execute(
-            'UPDATE licenses SET active = 1 WHERE license_key = ?',
-            (license_key,)
-        )
-        conn.commit()
+    try:
+        with get_db() as conn:
+            # Check if license exists first
+            existing = conn.execute(
+                'SELECT license_key, active FROM licenses WHERE license_key = ?',
+                (license_key,)
+            ).fetchone()
+            
+            if not existing:
+                print(f"ERROR: License {license_key} not found for activation")
+                return jsonify({'error': 'License not found'}), 404
+            
+            # Activate the license
+            result = conn.execute(
+                'UPDATE licenses SET active = 1 WHERE license_key = ?',
+                (license_key,)
+            )
+            conn.commit()
+            
+            print(f"SUCCESS: Activated license {license_key} (rows affected: {result.rowcount})")
+            
+            # Log the activation for audit trail
+            log_validation_attempt(license_key, 'ADMIN', 'ACTIVATED_BY_ADMIN', f'License manually activated by admin from IP: {get_real_ip()}')
         
-        # Log the activation for audit trail
-        log_validation_attempt(license_key, 'ADMIN', 'ACTIVATED_BY_ADMIN', f'License manually activated by admin from IP: {get_real_ip()}')
-    
-    return redirect('/admin')
+        return redirect('/admin')
+    except Exception as e:
+        print(f"ERROR: Failed to activate license {license_key}: {str(e)}")
+        return jsonify({'error': f'Failed to activate license: {str(e)}'}), 500
 
 @app.route('/admin/delete/<license_key>', methods=['POST'])
 def delete_license(license_key):
@@ -678,20 +720,26 @@ ADMIN_HTML = '''
                     </td>
                     <td>{{ license.last_used[:10] if license.last_used else 'Never' }}</td>
                     <td>
-                        {% if license.active %}
+                        {% if license.calculated_status == 'active' %}
                             <form method="POST" action="/admin/deactivate/{{ license.license_key }}" style="display: inline;">
-                                <button type="submit" class="btn btn-danger" onclick="return confirm('Deactivate license?')">Deactivate</button>
+                                <button type="submit" class="btn btn-warning" onclick="return confirm('⏸️ DEACTIVATE license {{ license.license_key[:20] }}...?\\n\\nThis will temporarily disable the license but keep it in the system.\\nUser will see a deactivation message and can be reactivated later.')">⏸️ Deactivate</button>
+                            </form>
+                        {% elif license.calculated_status == 'deactivated' %}
+                            <form method="POST" action="/admin/activate/{{ license.license_key }}" style="display: inline;">
+                                <button type="submit" class="btn btn-success" onclick="return confirm('▶️ ACTIVATE license {{ license.license_key[:20] }}...?\\n\\nThis will restore the license and allow the user to continue using it.')">▶️ Activate</button>
                             </form>
                         {% else %}
                             <form method="POST" action="/admin/activate/{{ license.license_key }}" style="display: inline;">
-                                <button type="submit" class="btn btn-success">Activate</button>
+                                <button type="submit" class="btn btn-success">🔄 Reactivate</button>
                             </form>
                         {% endif %}
+                        
                         <form method="POST" action="/admin/extend/{{ license.license_key }}" style="display: inline;">
-                            <button type="submit" class="btn btn-warning">+30 Days</button>
+                            <button type="submit" class="btn btn-warning" onclick="return confirm('📅 EXTEND license by 30 days?\\n\\nCurrent expiry: {{ license.expiry_date[:10] }}')">📅 +30 Days</button>
                         </form>
+                        
                         <form method="POST" action="/admin/delete/{{ license.license_key }}" style="display: inline;">
-                            <button type="submit" class="btn btn-danger" onclick="return confirm('PERMANENTLY DELETE this license? This cannot be undone!')">Delete</button>
+                            <button type="submit" class="btn btn-danger" onclick="return confirm('🗑️ PERMANENTLY DELETE license {{ license.license_key }}?\\n\\n⚠️ WARNING: This CANNOT be undone!\\n⚠️ The license will be completely removed from the database!\\n⚠️ The user will lose access permanently!\\n\\nOnly do this for refunds or permanent bans.\\n\\nAre you absolutely sure?') && confirm('🚨 FINAL WARNING 🚨\\n\\nYou are about to PERMANENTLY DELETE license:\\n{{ license.license_key }}\\n\\nCustomer: {{ license.customer_email }}\\n\\nThis action CANNOT be reversed!\\nType DELETE in the next prompt to confirm.')" style="margin-left: 10px;">🗑️ DELETE</button>
                         </form>
                     </td>
                 </tr>
