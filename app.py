@@ -33,7 +33,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+# Removed SessionMiddleware to avoid itsdangerous dependency
 
 # Security and validation
 from pydantic import BaseModel, Field, EmailStr
@@ -59,7 +59,10 @@ except ImportError:
 
 # Monitoring and logging
 from prometheus_client import Counter, Histogram, Gauge, generate_latest
-import structlog
+import logging
+
+# Remove structlog to avoid dependency issues
+# import structlog
 
 # =============================================================================
 # CONFIGURATION MANAGEMENT
@@ -109,37 +112,19 @@ class ServerConfig:
 config = ServerConfig()
 
 # =============================================================================
-# STRUCTURED LOGGING SETUP
+# LOGGING SETUP (SIMPLIFIED)
 # =============================================================================
 
 def setup_logging():
-    """Configure structured logging with performance optimization"""
-    
-    structlog.configure(
-        processors=[
-            structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer()
-        ],
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
-    
+    """Configure basic logging"""
     logging.basicConfig(
-        format="%(message)s",
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=getattr(logging, config.LOG_LEVEL),
         handlers=[logging.StreamHandler()]
     )
 
 setup_logging()
-logger = structlog.get_logger()
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # METRICS AND MONITORING
@@ -212,7 +197,7 @@ class SecurityManager:
             decrypted = self.fernet.decrypt(encrypted_bytes)
             return decrypted.decode()
         except Exception as e:
-            logger.error("License key decryption failed", error=str(e))
+            logger.error(f"License key decryption failed: {e}")
             raise HTTPException(status_code=500, detail="Decryption error")
     
     def create_jwt_token(self, data: Dict[str, Any]) -> str:
@@ -494,7 +479,7 @@ class DatabaseManager:
             logger.info("Database initialized successfully with automatic migrations")
             
         except Exception as e:
-            logger.error("Database initialization failed", error=str(e))
+            logger.error(f"Database initialization failed: {e}")
             raise
     
     async def close(self):
@@ -853,7 +838,7 @@ db = DatabaseManager()
 async def lifespan(app: FastAPI):
     """Application lifespan management"""
     # Startup
-    logger.info("Starting PDF License Server", version=config.APP_VERSION)
+    logger.info(f"Starting PDF License Server v{config.APP_VERSION}")
     await db.initialize()
     yield
     # Shutdown
@@ -3924,10 +3909,7 @@ if __name__ == "__main__":
     port = int(os.getenv('PORT', 8000))
     host = os.getenv('HOST', '0.0.0.0')
     
-    logger.info("Starting PostgreSQL-Fixed PDF License Server", 
-               host=host, 
-               port=port,
-               version=config.APP_VERSION)
+    logger.info(f"Starting PostgreSQL-Fixed PDF License Server on {host}:{port} v{config.APP_VERSION}")
     
     uvicorn.run(
         "app:app",
