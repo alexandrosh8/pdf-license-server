@@ -46,8 +46,19 @@ from cryptography.fernet import Fernet
 
 # Database and caching
 import asyncpg
-import aioredis
 from databases import Database
+
+# Optional Redis import
+try:
+    import redis.asyncio as aioredis
+    REDIS_AVAILABLE = True
+except ImportError:
+    try:
+        import aioredis
+        REDIS_AVAILABLE = True
+    except ImportError:
+        aioredis = None
+        REDIS_AVAILABLE = False
 
 # Monitoring and logging
 from prometheus_client import Counter, Histogram, Gauge, generate_latest
@@ -68,7 +79,7 @@ class ServerConfig:
     
     # Security
     SECRET_KEY: str = os.getenv('SECRET_KEY', secrets.token_urlsafe(32))
-    JWT_SECRET_KEY: str = os.getenv('JWT_SECRET_KEY', secrets.token_urlsafe(32))
+    JWT_SECRET_KEY: str = os.getenv('JWT_SECRET_KEY', os.getenv('ENCRYPTION_KEY', secrets.token_urlsafe(32)))
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
     REFRESH_TOKEN_EXPIRATION_DAYS: int = 30
@@ -79,7 +90,7 @@ class ServerConfig:
     
     # Database
     DATABASE_URL: str = os.getenv('DATABASE_URL', 'sqlite:///./licenses.db')
-    REDIS_URL: str = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    REDIS_URL: str = os.getenv('REDIS_URL', '')  # Empty string means no Redis
     
     # Performance
     CACHE_TTL: int = 300  # 5 minutes
@@ -260,12 +271,33 @@ class DatabaseManager:
             await self.database.connect()
             
             # Redis connection (optional - fallback gracefully)
-            try:
-                self.redis = aioredis.from_url(config.REDIS_URL, decode_responses=True)
-                await self.redis.ping()
-                logger.info("Redis connection established")
-            except Exception as e:
-                logger.warning("Redis connection failed, continuing without cache", error=str(e))
+            if REDIS_AVAILABLE and config.REDIS_URL and config.REDIS_URL != 'redis://localhost:6379/0':
+                try:
+                    # Clean and validate Redis URL
+                    redis_url = config.REDIS_URL.strip()
+                    
+                    # Check if URL has proper scheme
+                    if not redis_url.startswith(('redis://', 'rediss://', 'unix://')):
+                        logger.warning("Invalid Redis URL scheme, skipping Redis", url=redis_url[:20] + "...")
+                        self.redis = None
+                    else:
+                        if hasattr(aioredis, 'from_url'):
+                            self.redis = aioredis.from_url(redis_url, decode_responses=True)
+                        else:
+                            self.redis = await aioredis.create_redis_pool(redis_url)
+                        
+                        # Test connection
+                        if hasattr(self.redis, 'ping'):
+                            await self.redis.ping()
+                        else:
+                            await self.redis.execute('PING')
+                        
+                        logger.info("Redis connection established")
+                except Exception as e:
+                    logger.warning("Redis connection failed, continuing without cache", error=str(e))
+                    self.redis = None
+            else:
+                logger.info("Redis not configured, continuing without cache")
                 self.redis = None
             
             # Create tables
@@ -283,7 +315,13 @@ class DatabaseManager:
         if self.database:
             await self.database.disconnect()
         if self.redis:
-            await self.redis.close()
+            try:
+                if hasattr(self.redis, 'close'):
+                    await self.redis.close()
+                elif hasattr(self.redis, 'quit'):
+                    await self.redis.quit()
+            except Exception as e:
+                logger.warning("Redis close error", error=str(e))
     
     async def _create_tables(self):
         """Create optimized database schema"""
@@ -459,13 +497,22 @@ class DatabaseManager:
         
         license_hash = security.hash_license_key(license_key)
         
-        # Fetch license record
-        query = """
-            SELECT * FROM licenses 
-            WHERE license_key_hash = :hash AND active = TRUE
-        """
-        
-        license_record = await self.database.fetch_one(query, values={"hash": license_hash})
+        # Fetch license record - handle both boolean and integer active field
+        try:
+            query = """
+                SELECT * FROM licenses 
+                WHERE license_key_hash = :hash AND active = true
+            """
+            license_record = await self.database.fetch_one(query, values={"hash": license_hash})
+        except:
+            try:
+                query = """
+                    SELECT * FROM licenses 
+                    WHERE license_key_hash = :hash AND active = 1
+                """
+                license_record = await self.database.fetch_one(query, values={"hash": license_hash})
+            except:
+                license_record = None
         
         if not license_record:
             await self._log_validation(license_hash, hardware_id, "INVALID_KEY", client_info)
@@ -679,92 +726,142 @@ class DatabaseManager:
         }
     
     async def get_dashboard_stats(self) -> Dict[str, Any]:
-        """Get comprehensive dashboard statistics"""
+        """Get comprehensive dashboard statistics with error handling"""
         
-        # Basic counts
-        total_licenses = await self.database.fetch_val("SELECT COUNT(*) FROM licenses")
-        active_licenses_count = await self.database.fetch_val(
-            "SELECT COUNT(*) FROM licenses WHERE active = TRUE"
-        )
-        
-        if config.is_postgres:
-            valid_licenses = await self.database.fetch_val(
-                "SELECT COUNT(*) FROM licenses WHERE active = TRUE AND expiry_date > CURRENT_TIMESTAMP"
-            )
-            expired_licenses = await self.database.fetch_val(
-                "SELECT COUNT(*) FROM licenses WHERE expiry_date <= CURRENT_TIMESTAMP"
-            )
+        try:
+            # Basic counts - handle both boolean and integer active field
+            total_licenses = await self.database.fetch_val("SELECT COUNT(*) FROM licenses") or 0
             
-            # Validation statistics (last 24 hours)
-            validation_stats = await self.database.fetch_all("""
-                SELECT status, COUNT(*) as count
-                FROM validation_logs 
-                WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '24 hours'
-                GROUP BY status
-                ORDER BY count DESC
-            """)
+            # Try boolean first, fallback to integer
+            try:
+                active_licenses_count = await self.database.fetch_val(
+                    "SELECT COUNT(*) FROM licenses WHERE active = true"
+                ) or 0
+            except:
+                active_licenses_count = await self.database.fetch_val(
+                    "SELECT COUNT(*) FROM licenses WHERE active = 1"
+                ) or 0
             
-            # Recent validations
-            recent_validations = await self.database.fetch_all("""
-                SELECT license_key_hash, hardware_id, timestamp, status, 
-                       ip_address, app_version, response_time_ms
-                FROM validation_logs 
-                ORDER BY timestamp DESC 
-                LIMIT 50
-            """)
+            if config.is_postgres:
+                try:
+                    valid_licenses = await self.database.fetch_val(
+                        "SELECT COUNT(*) FROM licenses WHERE active = true AND expiry_date > CURRENT_TIMESTAMP"
+                    ) or 0
+                except:
+                    valid_licenses = await self.database.fetch_val(
+                        "SELECT COUNT(*) FROM licenses WHERE active = 1 AND expiry_date > CURRENT_TIMESTAMP"
+                    ) or 0
+                
+                expired_licenses = await self.database.fetch_val(
+                    "SELECT COUNT(*) FROM licenses WHERE expiry_date <= CURRENT_TIMESTAMP"
+                ) or 0
+                
+                # Validation statistics (last 24 hours)
+                try:
+                    validation_stats = await self.database.fetch_all("""
+                        SELECT status, COUNT(*) as count
+                        FROM validation_logs 
+                        WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                        GROUP BY status
+                        ORDER BY count DESC
+                    """)
+                except:
+                    validation_stats = []
+                
+                # Recent validations
+                try:
+                    recent_validations = await self.database.fetch_all("""
+                        SELECT license_key_hash, hardware_id, timestamp, status, 
+                               ip_address, app_version, response_time_ms
+                        FROM validation_logs 
+                        ORDER BY timestamp DESC 
+                        LIMIT 50
+                    """)
+                except:
+                    recent_validations = []
+                
+                # Performance metrics
+                try:
+                    avg_response_time = await self.database.fetch_val("""
+                        SELECT AVG(response_time_ms) 
+                        FROM validation_logs 
+                        WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+                    """) or 0
+                except:
+                    avg_response_time = 0
+            else:
+                try:
+                    valid_licenses = await self.database.fetch_val(
+                        "SELECT COUNT(*) FROM licenses WHERE active = 1 AND expiry_date > datetime('now')"
+                    ) or 0
+                except:
+                    valid_licenses = 0
+                
+                expired_licenses = await self.database.fetch_val(
+                    "SELECT COUNT(*) FROM licenses WHERE expiry_date <= datetime('now')"
+                ) or 0
+                
+                # Validation statistics (last 24 hours)
+                try:
+                    validation_stats = await self.database.fetch_all("""
+                        SELECT status, COUNT(*) as count
+                        FROM validation_logs 
+                        WHERE timestamp > datetime('now', '-24 hours')
+                        GROUP BY status
+                        ORDER BY count DESC
+                    """)
+                except:
+                    validation_stats = []
+                
+                # Recent validations
+                try:
+                    recent_validations = await self.database.fetch_all("""
+                        SELECT license_key_hash, hardware_id, timestamp, status, 
+                               ip_address, app_version, response_time_ms
+                        FROM validation_logs 
+                        ORDER BY timestamp DESC 
+                        LIMIT 50
+                    """)
+                except:
+                    recent_validations = []
+                
+                # Performance metrics
+                try:
+                    avg_response_time = await self.database.fetch_val("""
+                        SELECT AVG(response_time_ms) 
+                        FROM validation_logs 
+                        WHERE timestamp > datetime('now', '-1 hour')
+                    """) or 0
+                except:
+                    avg_response_time = 0
             
-            # Performance metrics
-            avg_response_time = await self.database.fetch_val("""
-                SELECT AVG(response_time_ms) 
-                FROM validation_logs 
-                WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
-            """) or 0
-        else:
-            valid_licenses = await self.database.fetch_val(
-                "SELECT COUNT(*) FROM licenses WHERE active = TRUE AND expiry_date > datetime('now')"
-            )
-            expired_licenses = await self.database.fetch_val(
-                "SELECT COUNT(*) FROM licenses WHERE expiry_date <= datetime('now')"
-            )
+            # Update Prometheus metrics
+            active_licenses.set(active_licenses_count)
             
-            # Validation statistics (last 24 hours)
-            validation_stats = await self.database.fetch_all("""
-                SELECT status, COUNT(*) as count
-                FROM validation_logs 
-                WHERE timestamp > datetime('now', '-24 hours')
-                GROUP BY status
-                ORDER BY count DESC
-            """)
+            return {
+                "total_licenses": total_licenses,
+                "active_licenses": active_licenses_count,
+                "valid_licenses": valid_licenses,
+                "expired_licenses": expired_licenses,
+                "validation_stats": [dict(row) for row in validation_stats],
+                "recent_validations": [dict(row) for row in recent_validations],
+                "avg_response_time_ms": round(avg_response_time, 2),
+                "cache_hit_rate": await self._get_cache_hit_rate()
+            }
             
-            # Recent validations
-            recent_validations = await self.database.fetch_all("""
-                SELECT license_key_hash, hardware_id, timestamp, status, 
-                       ip_address, app_version, response_time_ms
-                FROM validation_logs 
-                ORDER BY timestamp DESC 
-                LIMIT 50
-            """)
-            
-            # Performance metrics
-            avg_response_time = await self.database.fetch_val("""
-                SELECT AVG(response_time_ms) 
-                FROM validation_logs 
-                WHERE timestamp > datetime('now', '-1 hour')
-            """) or 0
-        
-        # Update Prometheus metrics
-        active_licenses.set(active_licenses_count)
-        
-        return {
-            "total_licenses": total_licenses,
-            "active_licenses": active_licenses_count,
-            "valid_licenses": valid_licenses,
-            "expired_licenses": expired_licenses,
-            "validation_stats": [dict(row) for row in validation_stats],
-            "recent_validations": [dict(row) for row in recent_validations],
-            "avg_response_time_ms": round(avg_response_time, 2),
-            "cache_hit_rate": await self._get_cache_hit_rate()
-        }
+        except Exception as e:
+            logger.error("Dashboard stats error", error=str(e))
+            # Return safe defaults if everything fails
+            return {
+                "total_licenses": 0,
+                "active_licenses": 0,
+                "valid_licenses": 0,
+                "expired_licenses": 0,
+                "validation_stats": [],
+                "recent_validations": [],
+                "avg_response_time_ms": 0.0,
+                "cache_hit_rate": 0.0
+            }
     
     async def _get_cache_hit_rate(self) -> float:
         """Calculate cache hit rate from Redis"""
@@ -1029,10 +1126,49 @@ async def admin_login(request: AdminLoginRequest):
 
 @app.get("/api/admin/dashboard")
 async def admin_dashboard(admin: Dict[str, Any] = Depends(get_current_admin)):
-    """Get comprehensive dashboard data"""
+    """Get comprehensive dashboard data with error handling"""
     
-    stats = await db.get_dashboard_stats()
-    return stats
+    try:
+        stats = await db.get_dashboard_stats()
+        return stats
+    except Exception as e:
+        logger.error("Dashboard endpoint error", error=str(e))
+        # Return safe fallback data
+        return {
+            "total_licenses": 0,
+            "active_licenses": 0,
+            "valid_licenses": 0,
+            "expired_licenses": 0,
+            "validation_stats": [],
+            "recent_validations": [],
+            "avg_response_time_ms": 0.0,
+            "cache_hit_rate": 0.0,
+            "error": "Dashboard temporarily unavailable"
+        }
+
+@app.get("/api/admin/simple-stats")
+async def simple_admin_stats(admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get simple stats without complex queries"""
+    
+    try:
+        # Very basic query that should always work
+        total_count = await db.database.fetch_val("SELECT COUNT(*) FROM licenses") or 0
+        
+        return {
+            "total_licenses": total_count,
+            "status": "healthy",
+            "database_connected": True,
+            "redis_connected": db.redis is not None
+        }
+    except Exception as e:
+        logger.error("Simple stats error", error=str(e))
+        return {
+            "total_licenses": 0,
+            "status": "error",
+            "database_connected": False,
+            "redis_connected": False,
+            "error": str(e)
+        }
 
 @app.post("/api/admin/licenses")
 async def create_license(request: LicenseCreateRequest,
@@ -1051,37 +1187,48 @@ async def list_licenses(limit: int = 50, offset: int = 0,
                        admin: Dict[str, Any] = Depends(get_current_admin)):
     """List licenses with pagination"""
     
-    query = """
-        SELECT license_key_hash, customer_email, customer_name, 
-               created_date, expiry_date, active, validation_count,
-               hardware_id, hardware_changes, last_validated
-        FROM licenses
-        ORDER BY created_date DESC
-        LIMIT :limit OFFSET :offset
-    """
-    
-    licenses = await db.database.fetch_all(query, values={"limit": limit, "offset": offset})
-    
-    # Decrypt license keys for admin display
-    result = []
-    for license_row in licenses:
-        license_dict = dict(license_row)
-        try:
-            # Get encrypted key
-            encrypted_query = "SELECT license_key_encrypted FROM licenses WHERE license_key_hash = :hash"
-            encrypted_row = await db.database.fetch_one(encrypted_query, 
-                                                      values={"hash": license_row['license_key_hash']})
-            if encrypted_row:
-                license_dict['license_key'] = security.decrypt_license_key(
-                    encrypted_row['license_key_encrypted']
-                )
-        except Exception as e:
-            license_dict['license_key'] = 'DECRYPTION_ERROR'
-            logger.error("License key decryption failed", error=str(e))
+    try:
+        query = """
+            SELECT license_key_hash, customer_email, customer_name, 
+                   created_date, expiry_date, active, validation_count,
+                   hardware_id, hardware_changes, last_validated
+            FROM licenses
+            ORDER BY created_date DESC
+            LIMIT :limit OFFSET :offset
+        """
         
-        result.append(license_dict)
-    
-    return {"licenses": result, "total": len(result)}
+        licenses = await db.database.fetch_all(query, values={"limit": limit, "offset": offset})
+        
+        # Decrypt license keys for admin display
+        result = []
+        for license_row in licenses:
+            license_dict = dict(license_row)
+            try:
+                # Get encrypted key
+                encrypted_query = "SELECT license_key_encrypted FROM licenses WHERE license_key_hash = :hash"
+                encrypted_row = await db.database.fetch_one(encrypted_query, 
+                                                          values={"hash": license_row['license_key_hash']})
+                if encrypted_row:
+                    license_dict['license_key'] = security.decrypt_license_key(
+                        encrypted_row['license_key_encrypted']
+                    )
+            except Exception as e:
+                license_dict['license_key'] = 'DECRYPTION_ERROR'
+                logger.error("License key decryption failed", error=str(e))
+            
+            # Convert dates to strings for JSON serialization
+            for date_field in ['created_date', 'expiry_date', 'last_validated']:
+                if license_dict.get(date_field):
+                    if hasattr(license_dict[date_field], 'isoformat'):
+                        license_dict[date_field] = license_dict[date_field].isoformat()
+            
+            result.append(license_dict)
+        
+        return {"licenses": result, "total": len(result)}
+        
+    except Exception as e:
+        logger.error("List licenses error", error=str(e))
+        return {"licenses": [], "total": 0, "error": "Failed to fetch licenses"}
 
 # =============================================================================
 # ADMIN WEB INTERFACE
@@ -1383,35 +1530,54 @@ async def admin_dashboard_page():
         
         async function loadDashboard() {
             try {
-                const response = await fetchWithAuth('/api/admin/dashboard');
+                // Try the main dashboard endpoint first
+                let response = await fetchWithAuth('/api/admin/dashboard');
                 if (!response) return;
                 
-                const data = await response.json();
+                let data;
+                if (response.ok) {
+                    data = await response.json();
+                } else {
+                    // Fallback to simple stats if main dashboard fails
+                    console.log('Main dashboard failed, trying simple stats...');
+                    response = await fetchWithAuth('/api/admin/simple-stats');
+                    if (!response || !response.ok) {
+                        throw new Error('Both dashboard endpoints failed');
+                    }
+                    data = await response.json();
+                    // Add default values for missing fields
+                    data.valid_licenses = data.valid_licenses || 0;
+                    data.expired_licenses = data.expired_licenses || 0;
+                    data.avg_response_time_ms = data.avg_response_time_ms || 0;
+                    data.cache_hit_rate = data.cache_hit_rate || 0;
+                    data.validation_stats = data.validation_stats || [];
+                    data.recent_validations = data.recent_validations || [];
+                }
                 
                 // Update stats
                 document.getElementById('statsGrid').innerHTML = `
                     <div class="stat-card">
-                        <div class="stat-number">${data.total_licenses}</div>
+                        <div class="stat-number">${data.total_licenses || 0}</div>
                         <div class="stat-label">Total Licenses</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number">${data.active_licenses}</div>
+                        <div class="stat-number">${data.active_licenses || 0}</div>
                         <div class="stat-label">Active Licenses</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number">${data.valid_licenses}</div>
+                        <div class="stat-number">${data.valid_licenses || 0}</div>
                         <div class="stat-label">Valid & Current</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number">${data.expired_licenses}</div>
+                        <div class="stat-number">${data.expired_licenses || 0}</div>
                         <div class="stat-label">Expired</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number">${data.avg_response_time_ms}ms</div>
+                        <div class="stat-number">${data.avg_response_time_ms || 0}ms</div>
                         <div class="stat-label">Avg Response Time</div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-number">${data.cache_hit_rate}%</div>
+                        <div class="stat-number">${data.cache_hit_rate || 0}%</div>
                         <div class="stat-label">Cache Hit Rate</div>
                     </div>
                 `;
@@ -1419,27 +1585,45 @@ async def admin_dashboard_page():
                 // Update recent validations
                 let validationsHtml = '<table><thead><tr><th>License</th><th>Hardware ID</th><th>Status</th><th>Time</th><th>Response</th></tr></thead><tbody>';
                 
-                data.recent_validations.slice(0, 20).forEach(validation => {
-                    const statusClass = validation.status.includes('VALID') ? 'status-active' : 
-                                       validation.status.includes('EXPIRED') ? 'status-expired' : 'status-inactive';
-                    
-                    validationsHtml += `
-                        <tr>
-                            <td>${validation.license_key_hash.substring(0, 12)}...</td>
-                            <td>${validation.hardware_id || 'N/A'}</td>
-                            <td><span class="${statusClass}">${validation.status}</span></td>
-                            <td>${new Date(validation.timestamp).toLocaleString()}</td>
-                            <td>${validation.response_time_ms || 'N/A'}ms</td>
-                        </tr>
-                    `;
-                });
+                if (data.recent_validations && data.recent_validations.length > 0) {
+                    data.recent_validations.slice(0, 20).forEach(validation => {
+                        const statusClass = validation.status.includes('VALID') ? 'status-active' : 
+                                           validation.status.includes('EXPIRED') ? 'status-expired' : 'status-inactive';
+                        
+                        validationsHtml += `
+                            <tr>
+                                <td>${(validation.license_key_hash || 'N/A').substring(0, 12)}...</td>
+                                <td>${validation.hardware_id || 'N/A'}</td>
+                                <td><span class="${statusClass}">${validation.status || 'UNKNOWN'}</span></td>
+                                <td>${validation.timestamp ? new Date(validation.timestamp).toLocaleString() : 'N/A'}</td>
+                                <td>${validation.response_time_ms || 'N/A'}ms</td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    validationsHtml += '<tr><td colspan="5" style="text-align: center; color: #666;">No validation data available</td></tr>';
+                }
                 
                 validationsHtml += '</tbody></table>';
                 document.getElementById('recentValidations').innerHTML = validationsHtml;
                 
+                // Show error message if present
+                if (data.error) {
+                    document.getElementById('statsGrid').innerHTML += `
+                        <div class="stat-card" style="background: #fee; color: #c33;">
+                            <div class="stat-label">⚠️ ${data.error}</div>
+                        </div>
+                    `;
+                }
+                
             } catch (error) {
-                document.getElementById('statsGrid').innerHTML = '<div class="error">Failed to load dashboard data</div>';
-                document.getElementById('recentValidations').innerHTML = '<div class="error">Failed to load validations</div>';
+                console.error('Dashboard load error:', error);
+                document.getElementById('statsGrid').innerHTML = `
+                    <div class="error">Failed to load dashboard data. Please refresh the page.</div>
+                `;
+                document.getElementById('recentValidations').innerHTML = `
+                    <div class="error">Failed to load validations. Check server logs for details.</div>
+                `;
             }
         }
         
