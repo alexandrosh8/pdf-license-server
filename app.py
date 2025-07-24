@@ -259,8 +259,14 @@ class DatabaseManager:
             self.database = Database(config.DATABASE_URL)
             await self.database.connect()
             
-            # Redis connection
-            self.redis = aioredis.from_url(config.REDIS_URL, decode_responses=True)
+            # Redis connection (optional - fallback gracefully)
+            try:
+                self.redis = aioredis.from_url(config.REDIS_URL, decode_responses=True)
+                await self.redis.ping()
+                logger.info("Redis connection established")
+            except Exception as e:
+                logger.warning("Redis connection failed, continuing without cache", error=str(e))
+                self.redis = None
             
             # Create tables
             await self._create_tables()
@@ -282,57 +288,106 @@ class DatabaseManager:
     async def _create_tables(self):
         """Create optimized database schema"""
         
-        # Licenses table with optimized indexes
-        await self.database.execute("""
-            CREATE TABLE IF NOT EXISTS licenses (
-                id SERIAL PRIMARY KEY,
-                license_key_hash VARCHAR(64) UNIQUE NOT NULL,
-                license_key_encrypted TEXT NOT NULL,
-                hardware_id VARCHAR(32),
-                customer_email VARCHAR(255) NOT NULL,
-                customer_name VARCHAR(255),
-                created_date TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
-                last_validated TIMESTAMP WITH TIME ZONE,
-                validation_count INTEGER DEFAULT 0,
-                hardware_changes INTEGER DEFAULT 0,
-                previous_hardware_ids TEXT,
-                active BOOLEAN DEFAULT TRUE,
-                payment_id VARCHAR(100),
-                notes TEXT,
-                metadata JSONB DEFAULT '{}'
-            )
-        """)
-        
-        # Validation logs table with partitioning support
-        await self.database.execute("""
-            CREATE TABLE IF NOT EXISTS validation_logs (
-                id SERIAL PRIMARY KEY,
-                license_key_hash VARCHAR(64),
-                hardware_id VARCHAR(32),
-                timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                status VARCHAR(50) NOT NULL,
-                ip_address INET,
-                user_agent TEXT,
-                app_version VARCHAR(20),
-                response_time_ms INTEGER,
-                details JSONB DEFAULT '{}'
-            )
-        """)
-        
-        # Admin sessions table
-        await self.database.execute("""
-            CREATE TABLE IF NOT EXISTS admin_sessions (
-                id SERIAL PRIMARY KEY,
-                session_id VARCHAR(255) UNIQUE NOT NULL,
-                admin_username VARCHAR(100) NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                ip_address INET,
-                user_agent TEXT,
-                active BOOLEAN DEFAULT TRUE
-            )
-        """)
+        if config.is_postgres:
+            # PostgreSQL schema
+            await self.database.execute("""
+                CREATE TABLE IF NOT EXISTS licenses (
+                    id SERIAL PRIMARY KEY,
+                    license_key_hash VARCHAR(64) UNIQUE NOT NULL,
+                    license_key_encrypted TEXT NOT NULL,
+                    hardware_id VARCHAR(32),
+                    customer_email VARCHAR(255) NOT NULL,
+                    customer_name VARCHAR(255),
+                    created_date TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                    last_validated TIMESTAMP WITH TIME ZONE,
+                    validation_count INTEGER DEFAULT 0,
+                    hardware_changes INTEGER DEFAULT 0,
+                    previous_hardware_ids TEXT,
+                    active BOOLEAN DEFAULT TRUE,
+                    payment_id VARCHAR(100),
+                    notes TEXT,
+                    metadata JSONB DEFAULT '{}'
+                )
+            """)
+            
+            await self.database.execute("""
+                CREATE TABLE IF NOT EXISTS validation_logs (
+                    id SERIAL PRIMARY KEY,
+                    license_key_hash VARCHAR(64),
+                    hardware_id VARCHAR(32),
+                    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR(50) NOT NULL,
+                    ip_address INET,
+                    user_agent TEXT,
+                    app_version VARCHAR(20),
+                    response_time_ms INTEGER,
+                    details JSONB DEFAULT '{}'
+                )
+            """)
+            
+            await self.database.execute("""
+                CREATE TABLE IF NOT EXISTS admin_sessions (
+                    id SERIAL PRIMARY KEY,
+                    session_id VARCHAR(255) UNIQUE NOT NULL,
+                    admin_username VARCHAR(100) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    ip_address INET,
+                    user_agent TEXT,
+                    active BOOLEAN DEFAULT TRUE
+                )
+            """)
+        else:
+            # SQLite schema
+            await self.database.execute("""
+                CREATE TABLE IF NOT EXISTS licenses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    license_key_hash VARCHAR(64) UNIQUE NOT NULL,
+                    license_key_encrypted TEXT NOT NULL,
+                    hardware_id VARCHAR(32),
+                    customer_email VARCHAR(255) NOT NULL,
+                    customer_name VARCHAR(255),
+                    created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expiry_date DATETIME NOT NULL,
+                    last_validated DATETIME,
+                    validation_count INTEGER DEFAULT 0,
+                    hardware_changes INTEGER DEFAULT 0,
+                    previous_hardware_ids TEXT,
+                    active BOOLEAN DEFAULT TRUE,
+                    payment_id VARCHAR(100),
+                    notes TEXT,
+                    metadata TEXT DEFAULT '{}'
+                )
+            """)
+            
+            await self.database.execute("""
+                CREATE TABLE IF NOT EXISTS validation_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    license_key_hash VARCHAR(64),
+                    hardware_id VARCHAR(32),
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR(50) NOT NULL,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    app_version VARCHAR(20),
+                    response_time_ms INTEGER,
+                    details TEXT DEFAULT '{}'
+                )
+            """)
+            
+            await self.database.execute("""
+                CREATE TABLE IF NOT EXISTS admin_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id VARCHAR(255) UNIQUE NOT NULL,
+                    admin_username VARCHAR(100) NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME NOT NULL,
+                    ip_address TEXT,
+                    user_agent TEXT,
+                    active BOOLEAN DEFAULT TRUE
+                )
+            """)
         
         # Create performance indexes
         await self._create_indexes()
@@ -360,30 +415,37 @@ class DatabaseManager:
         start_time = time.time()
         
         try:
-            # Check Redis cache first
-            cache_key = f"license:{security.hash_license_key(license_key)}:{hardware_id}"
-            cached_result = await self.redis.get(cache_key)
-            
-            if cached_result:
-                cache_hits.labels(cache_type="redis").inc()
-                result = json.loads(cached_result)
-                
-                # Verify cache validity
-                if result.get('cached_until', 0) > time.time():
-                    license_validations.labels(status="cached_valid").inc()
-                    return result
+            # Check Redis cache first (if available)
+            if self.redis:
+                cache_key = f"license:{security.hash_license_key(license_key)}:{hardware_id}"
+                try:
+                    cached_result = await self.redis.get(cache_key)
+                    
+                    if cached_result:
+                        cache_hits.labels(cache_type="redis").inc()
+                        result = json.loads(cached_result)
+                        
+                        # Verify cache validity
+                        if result.get('cached_until', 0) > time.time():
+                            license_validations.labels(status="cached_valid").inc()
+                            return result
+                except Exception as e:
+                    logger.warning("Cache read failed", error=str(e))
             
             # Database validation
             result = await self._validate_license_db(license_key, hardware_id, client_info)
             
-            # Cache successful validations
-            if result.get('valid'):
-                result['cached_until'] = time.time() + config.CACHE_TTL
-                await self.redis.setex(
-                    cache_key, 
-                    config.CACHE_TTL, 
-                    json.dumps(result)
-                )
+            # Cache successful validations (if Redis available)
+            if result.get('valid') and self.redis:
+                try:
+                    result['cached_until'] = time.time() + config.CACHE_TTL
+                    await self.redis.setex(
+                        cache_key, 
+                        config.CACHE_TTL, 
+                        json.dumps(result)
+                    )
+                except Exception as e:
+                    logger.warning("Cache write failed", error=str(e))
             
             return result
             
@@ -411,7 +473,11 @@ class DatabaseManager:
             return {"valid": False, "reason": "Invalid license key"}
         
         # Check expiration
-        if license_record['expiry_date'] <= datetime.now(timezone.utc):
+        expiry_date = license_record['expiry_date']
+        if isinstance(expiry_date, str):
+            expiry_date = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
+        
+        if expiry_date <= datetime.now(timezone.utc):
             await self._log_validation(license_hash, hardware_id, "EXPIRED", client_info)
             license_validations.labels(status="expired").inc()
             return {"valid": False, "reason": "License expired"}
@@ -451,13 +517,13 @@ class DatabaseManager:
             license_validations.labels(status="valid").inc()
         
         # Calculate remaining days
-        remaining_days = (license_record['expiry_date'] - datetime.now(timezone.utc)).days
+        remaining_days = (expiry_date - datetime.now(timezone.utc)).days
         
         return {
             "valid": True,
             "license_key": license_key,
             "customer_email": license_record['customer_email'],
-            "expiry_date": license_record['expiry_date'].isoformat(),
+            "expiry_date": expiry_date.isoformat(),
             "days_remaining": max(0, remaining_days),
             "validation_count": license_record['validation_count'] + 1,
             "hardware_changes": license_record['hardware_changes']
@@ -465,12 +531,20 @@ class DatabaseManager:
     
     async def _bind_hardware(self, license_hash: str, hardware_id: str):
         """Bind license to hardware for first time"""
-        query = """
-            UPDATE licenses 
-            SET hardware_id = :hardware_id, validation_count = validation_count + 1,
-                last_validated = CURRENT_TIMESTAMP
-            WHERE license_key_hash = :hash
-        """
+        if config.is_postgres:
+            query = """
+                UPDATE licenses 
+                SET hardware_id = :hardware_id, validation_count = validation_count + 1,
+                    last_validated = CURRENT_TIMESTAMP
+                WHERE license_key_hash = :hash
+            """
+        else:
+            query = """
+                UPDATE licenses 
+                SET hardware_id = :hardware_id, validation_count = validation_count + 1,
+                    last_validated = CURRENT_TIMESTAMP
+                WHERE license_key_hash = :hash
+            """
         await self.database.execute(query, values={
             "hardware_id": hardware_id,
             "hash": license_hash
@@ -530,6 +604,8 @@ class DatabaseManager:
                     :app_version, :response_time_ms, :details)
         """
         
+        details = json.dumps(client_info.get('details', {})) if config.is_postgres else str(client_info.get('details', {}))
+        
         await self.database.execute(query, values={
             "hash": license_hash,
             "hardware_id": hardware_id,
@@ -538,7 +614,7 @@ class DatabaseManager:
             "user_agent": client_info.get('user_agent'),
             "app_version": client_info.get('app_version'),
             "response_time_ms": int((time.time() - client_info.get('start_time', time.time())) * 1000),
-            "details": json.dumps(client_info.get('details', {}))
+            "details": details
         })
     
     async def create_license(self, request: LicenseCreateRequest) -> Dict[str, Any]:
@@ -551,25 +627,43 @@ class DatabaseManager:
         created_date = datetime.now(timezone.utc)
         expiry_date = created_date + timedelta(days=request.duration_days)
         
-        query = """
-            INSERT INTO licenses 
-            (license_key_hash, license_key_encrypted, hardware_id, customer_email,
-             customer_name, expiry_date, payment_id, notes)
-            VALUES (:hash, :encrypted_key, :hardware_id, :customer_email,
-                    :customer_name, :expiry_date, :payment_id, :notes)
-            RETURNING id
-        """
-        
-        license_id = await self.database.execute(query, values={
-            "hash": license_hash,
-            "encrypted_key": encrypted_key,
-            "hardware_id": request.hardware_id,
-            "customer_email": request.customer_email,
-            "customer_name": request.customer_name,
-            "expiry_date": expiry_date,
-            "payment_id": request.payment_id,
-            "notes": request.notes
-        })
+        if config.is_postgres:
+            query = """
+                INSERT INTO licenses 
+                (license_key_hash, license_key_encrypted, hardware_id, customer_email,
+                 customer_name, expiry_date, payment_id, notes)
+                VALUES (:hash, :encrypted_key, :hardware_id, :customer_email,
+                        :customer_name, :expiry_date, :payment_id, :notes)
+                RETURNING id
+            """
+            license_id = await self.database.execute(query, values={
+                "hash": license_hash,
+                "encrypted_key": encrypted_key,
+                "hardware_id": request.hardware_id,
+                "customer_email": request.customer_email,
+                "customer_name": request.customer_name,
+                "expiry_date": expiry_date,
+                "payment_id": request.payment_id,
+                "notes": request.notes
+            })
+        else:
+            query = """
+                INSERT INTO licenses 
+                (license_key_hash, license_key_encrypted, hardware_id, customer_email,
+                 customer_name, expiry_date, payment_id, notes)
+                VALUES (:hash, :encrypted_key, :hardware_id, :customer_email,
+                        :customer_name, :expiry_date, :payment_id, :notes)
+            """
+            license_id = await self.database.execute(query, values={
+                "hash": license_hash,
+                "encrypted_key": encrypted_key,
+                "hardware_id": request.hardware_id,
+                "customer_email": request.customer_email,
+                "customer_name": request.customer_name,
+                "expiry_date": expiry_date.isoformat(),
+                "payment_id": request.payment_id,
+                "notes": request.notes
+            })
         
         logger.info("License created", 
                    license_id=license_id,
@@ -592,40 +686,74 @@ class DatabaseManager:
         active_licenses_count = await self.database.fetch_val(
             "SELECT COUNT(*) FROM licenses WHERE active = TRUE"
         )
-        valid_licenses = await self.database.fetch_val(
-            "SELECT COUNT(*) FROM licenses WHERE active = TRUE AND expiry_date > CURRENT_TIMESTAMP"
-        )
-        expired_licenses = await self.database.fetch_val(
-            "SELECT COUNT(*) FROM licenses WHERE expiry_date <= CURRENT_TIMESTAMP"
-        )
+        
+        if config.is_postgres:
+            valid_licenses = await self.database.fetch_val(
+                "SELECT COUNT(*) FROM licenses WHERE active = TRUE AND expiry_date > CURRENT_TIMESTAMP"
+            )
+            expired_licenses = await self.database.fetch_val(
+                "SELECT COUNT(*) FROM licenses WHERE expiry_date <= CURRENT_TIMESTAMP"
+            )
+            
+            # Validation statistics (last 24 hours)
+            validation_stats = await self.database.fetch_all("""
+                SELECT status, COUNT(*) as count
+                FROM validation_logs 
+                WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                GROUP BY status
+                ORDER BY count DESC
+            """)
+            
+            # Recent validations
+            recent_validations = await self.database.fetch_all("""
+                SELECT license_key_hash, hardware_id, timestamp, status, 
+                       ip_address, app_version, response_time_ms
+                FROM validation_logs 
+                ORDER BY timestamp DESC 
+                LIMIT 50
+            """)
+            
+            # Performance metrics
+            avg_response_time = await self.database.fetch_val("""
+                SELECT AVG(response_time_ms) 
+                FROM validation_logs 
+                WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
+            """) or 0
+        else:
+            valid_licenses = await self.database.fetch_val(
+                "SELECT COUNT(*) FROM licenses WHERE active = TRUE AND expiry_date > datetime('now')"
+            )
+            expired_licenses = await self.database.fetch_val(
+                "SELECT COUNT(*) FROM licenses WHERE expiry_date <= datetime('now')"
+            )
+            
+            # Validation statistics (last 24 hours)
+            validation_stats = await self.database.fetch_all("""
+                SELECT status, COUNT(*) as count
+                FROM validation_logs 
+                WHERE timestamp > datetime('now', '-24 hours')
+                GROUP BY status
+                ORDER BY count DESC
+            """)
+            
+            # Recent validations
+            recent_validations = await self.database.fetch_all("""
+                SELECT license_key_hash, hardware_id, timestamp, status, 
+                       ip_address, app_version, response_time_ms
+                FROM validation_logs 
+                ORDER BY timestamp DESC 
+                LIMIT 50
+            """)
+            
+            # Performance metrics
+            avg_response_time = await self.database.fetch_val("""
+                SELECT AVG(response_time_ms) 
+                FROM validation_logs 
+                WHERE timestamp > datetime('now', '-1 hour')
+            """) or 0
         
         # Update Prometheus metrics
         active_licenses.set(active_licenses_count)
-        
-        # Validation statistics (last 24 hours)
-        validation_stats = await self.database.fetch_all("""
-            SELECT status, COUNT(*) as count
-            FROM validation_logs 
-            WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '24 hours'
-            GROUP BY status
-            ORDER BY count DESC
-        """)
-        
-        # Recent validations
-        recent_validations = await self.database.fetch_all("""
-            SELECT license_key_hash, hardware_id, timestamp, status, 
-                   ip_address, app_version, response_time_ms
-            FROM validation_logs 
-            ORDER BY timestamp DESC 
-            LIMIT 50
-        """)
-        
-        # Performance metrics
-        avg_response_time = await self.database.fetch_val("""
-            SELECT AVG(response_time_ms) 
-            FROM validation_logs 
-            WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
-        """) or 0
         
         return {
             "total_licenses": total_licenses,
@@ -640,6 +768,9 @@ class DatabaseManager:
     
     async def _get_cache_hit_rate(self) -> float:
         """Calculate cache hit rate from Redis"""
+        if not self.redis:
+            return 0.0
+        
         try:
             info = await self.redis.info()
             hits = info.get('keyspace_hits', 0)
@@ -810,17 +941,21 @@ async def health_check():
         await db.database.fetch_val("SELECT 1")
         db_status = "healthy"
         
-        # Test Redis connection
-        await db.redis.ping()
-        cache_status = "healthy"
+        # Test Redis connection (if available)
+        cache_status = "not_configured"
+        if db.redis:
+            try:
+                await db.redis.ping()
+                cache_status = "healthy"
+            except:
+                cache_status = "unhealthy"
         
         return {
             "status": "healthy",
             "timestamp": datetime.utcnow().isoformat(),
             "version": config.APP_VERSION,
             "database": db_status,
-            "cache": cache_status,
-            "uptime_seconds": int(time.time())
+            "cache": cache_status
         }
     
     except Exception as e:
@@ -867,13 +1002,9 @@ async def metrics():
 async def admin_login(request: AdminLoginRequest):
     """Admin login with JWT token generation"""
     
-    if (request.username != config.ADMIN_USERNAME or 
-        not security.verify_password(request.password, security.hash_password(config.ADMIN_PASSWORD))):
-        
-        # For simplicity, we'll do plain text comparison in this demo
-        # In production, store hashed passwords in database
-        if request.username != config.ADMIN_USERNAME or request.password != config.ADMIN_PASSWORD:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+    # Simple credential check (in production, use proper password hashing)
+    if request.username != config.ADMIN_USERNAME or request.password != config.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     
     # Create JWT token
     token_data = {
@@ -951,61 +1082,6 @@ async def list_licenses(limit: int = 50, offset: int = 0,
         result.append(license_dict)
     
     return {"licenses": result, "total": len(result)}
-
-@app.put("/api/admin/licenses/{license_key}/extend")
-async def extend_license(license_key: str, days: int = 30,
-                        admin: Dict[str, Any] = Depends(get_current_admin)):
-    """Extend license expiration"""
-    
-    license_hash = security.hash_license_key(license_key)
-    
-    query = """
-        UPDATE licenses 
-        SET expiry_date = expiry_date + INTERVAL '%s days'
-        WHERE license_key_hash = :hash
-        RETURNING expiry_date
-    """ % days
-    
-    result = await db.database.fetch_one(query, values={"hash": license_hash})
-    
-    if not result:
-        raise HTTPException(status_code=404, detail="License not found")
-    
-    logger.info("License extended", 
-               admin=admin.get('sub'),
-               license_key=license_key[:20] + "...",
-               days=days)
-    
-    return {"message": f"License extended by {days} days", 
-            "new_expiry": result['expiry_date'].isoformat()}
-
-@app.put("/api/admin/licenses/{license_key}/toggle")
-async def toggle_license_status(license_key: str,
-                               admin: Dict[str, Any] = Depends(get_current_admin)):
-    """Toggle license active status"""
-    
-    license_hash = security.hash_license_key(license_key)
-    
-    query = """
-        UPDATE licenses 
-        SET active = NOT active
-        WHERE license_key_hash = :hash
-        RETURNING active
-    """
-    
-    result = await db.database.fetch_one(query, values={"hash": license_hash})
-    
-    if not result:
-        raise HTTPException(status_code=404, detail="License not found")
-    
-    status = "activated" if result['active'] else "deactivated"
-    
-    logger.info("License status changed", 
-               admin=admin.get('sub'),
-               license_key=license_key[:20] + "...",
-               new_status=status)
-    
-    return {"message": f"License {status}", "active": result['active']}
 
 # =============================================================================
 # ADMIN WEB INTERFACE
@@ -1392,22 +1468,17 @@ if __name__ == "__main__":
     # Production configuration
     port = int(os.getenv('PORT', 8000))
     host = os.getenv('HOST', '0.0.0.0')
-    workers = int(os.getenv('WORKERS', 1))
     
     logger.info("Starting PDF License Server", 
                host=host, 
-               port=port, 
-               workers=workers,
+               port=port,
                version=config.APP_VERSION)
     
     # Run with Uvicorn
     uvicorn.run(
-        "app:app",  # Replace with your module name
+        "app:app",
         host=host,
         port=port,
-        workers=workers,
-        loop="auto",
-        http="auto",
         access_log=True,
         log_level=config.LOG_LEVEL.lower()
     )
