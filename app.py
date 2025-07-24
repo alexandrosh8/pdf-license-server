@@ -462,27 +462,36 @@ class DatabaseManager:
         self.migrator = None
     
     async def initialize(self):
-        """Initialize database and Redis connections"""
+        """Initialize database and Redis connections with automatic migrations"""
         try:
             # Database connection
             self.database = Database(config.DATABASE_URL)
             await self.database.connect()
             
-            # Initialize migrator and run migrations
+            # Run migrations automatically on startup (FREE TIER COMPATIBLE)
+            logger.info("Running database migrations on startup...")
             self.migrator = DatabaseMigrator(self.database)
             await self.migrator.run_migrations()
             
             # Redis connection (optional)
             if REDIS_AVAILABLE and config.REDIS_URL:
                 try:
-                    self.redis = aioredis.from_url(config.REDIS_URL, decode_responses=True)
-                    await self.redis.ping()
-                    logger.info("Redis connection established")
+                    redis_url = config.REDIS_URL.strip()
+                    if redis_url and not redis_url.startswith(('redis://', 'rediss://', 'unix://')):
+                        logger.warning("Invalid Redis URL scheme, skipping Redis")
+                        self.redis = None
+                    else:
+                        self.redis = aioredis.from_url(redis_url, decode_responses=True)
+                        await self.redis.ping()
+                        logger.info("Redis connection established")
                 except Exception as e:
                     logger.warning("Redis connection failed", error=str(e))
                     self.redis = None
+            else:
+                logger.info("Redis not configured")
+                self.redis = None
             
-            logger.info("Database initialized successfully")
+            logger.info("Database initialized successfully with automatic migrations")
             
         except Exception as e:
             logger.error("Database initialization failed", error=str(e))
@@ -1613,6 +1622,128 @@ async def export_licenses(format: str = "csv", admin: Dict[str, Any] = Depends(g
         logger.error("License export error", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to export licenses")
 
+@app.post("/api/admin/migrate")
+async def run_manual_migration(admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Manually run database migrations (FREE TIER COMPATIBLE)"""
+    
+    try:
+        logger.info("Manual migration started", admin=admin.get('sub'))
+        
+        # Create fresh migrator instance
+        migrator = DatabaseMigrator(db.database)
+        await migrator.run_migrations()
+        
+        # Log the action
+        await db._log_admin_action(
+            admin.get('sub'),
+            'MANUAL_MIGRATION',
+            "Manually triggered database migrations"
+        )
+        
+        logger.info("Manual migration completed successfully", admin=admin.get('sub'))
+        
+        return {
+            "success": True,
+            "message": "Database migrations completed successfully! Your PostgreSQL database is now fully optimized."
+        }
+        
+    except Exception as e:
+        logger.error("Manual migration failed", error=str(e), admin=admin.get('sub'))
+        raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
+
+@app.get("/api/admin/system/status")
+async def get_system_status(admin: Dict[str, Any] = Depends(get_current_admin)):
+    """Get detailed system status for troubleshooting"""
+    
+    try:
+        # Database status
+        db_status = "healthy"
+        db_version = None
+        try:
+            await db.database.fetch_val("SELECT 1")
+            db_version = await db.database.fetch_val("SELECT version()")
+        except Exception as e:
+            db_status = f"error: {str(e)}"
+        
+        # Redis status
+        redis_status = "not_configured"
+        if db.redis:
+            try:
+                await db.redis.ping()
+                redis_status = "healthy"
+            except Exception as e:
+                redis_status = f"error: {str(e)}"
+        
+        # Check if migrations table exists
+        migration_status = "unknown"
+        try:
+            result = await db.database.fetch_val("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'schema_migrations'
+                )
+            """)
+            migration_status = "table_exists" if result else "table_missing"
+        except Exception as e:
+            migration_status = f"error: {str(e)}"
+        
+        # Check latest migration version
+        latest_migration = 0
+        try:
+            latest_migration = await db.database.fetch_val(
+                "SELECT MAX(version) FROM schema_migrations"
+            ) or 0
+        except:
+            pass
+        
+        # Check critical columns
+        column_checks = {}
+        critical_columns = [
+            ('licenses', 'validation_count'),
+            ('licenses', 'expiry_date'),
+            ('validation_logs', 'timestamp')
+        ]
+        
+        for table, column in critical_columns:
+            try:
+                exists = await db.database.fetch_val("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_name = %s AND column_name = %s
+                    )
+                """, table, column)
+                column_checks[f"{table}.{column}"] = "exists" if exists else "missing"
+            except Exception as e:
+                column_checks[f"{table}.{column}"] = f"error: {str(e)}"
+        
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "database": {
+                "status": db_status,
+                "version": db_version,
+                "url_configured": bool(config.DATABASE_URL)
+            },
+            "redis": {
+                "status": redis_status,
+                "url_configured": bool(config.REDIS_URL)
+            },
+            "migrations": {
+                "status": migration_status,
+                "latest_version": latest_migration,
+                "expected_version": 4  # Update this when you add more migrations
+            },
+            "column_checks": column_checks,
+            "config": {
+                "app_version": config.APP_VERSION,
+                "log_level": config.LOG_LEVEL,
+                "is_postgres": config.is_postgres
+            }
+        }
+        
+    except Exception as e:
+        logger.error("System status check failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get system status")
+
 @app.get("/", response_class=HTMLResponse)
 async def admin_login_page():
     """Admin login page"""
@@ -2561,6 +2692,12 @@ async def admin_dashboard_page():
                                     </button>
                                     <button class="btn btn-success" onclick="testDatabase()">
                                         <i class="fas fa-database"></i> Test Database
+                                    </button>
+                                    <button class="btn btn-warning" onclick="runMigration()" title="Free Tier Compatible">
+                                        <i class="fas fa-cogs"></i> Run Migration
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="showSystemStatus()">
+                                        <i class="fas fa-info-circle"></i> System Status
                                     </button>
                                     <button class="btn btn-secondary" onclick="showPage('licenses')">
                                         <i class="fas fa-list"></i> View All Licenses
@@ -3628,6 +3765,114 @@ async def admin_dashboard_page():
             } catch (error) {
                 showAlert('❌ Database test failed. Check your connection.', 'danger');
             }
+        }
+
+        // Manual migration function (FREE TIER COMPATIBLE)
+        async function runMigration() {
+            if (!confirm('🔧 Run database migrations?\n\nThis will:\n• Fix PostgreSQL timestamp errors\n• Add missing columns\n• Create performance indexes\n\nSafe to run multiple times. Continue?')) {
+                return;
+            }
+            
+            const button = event.target;
+            const originalText = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running Migration...';
+            button.disabled = true;
+            
+            try {
+                const response = await apiCall('/api/admin/migrate', {
+                    method: 'POST'
+                });
+                
+                if (response && response.ok) {
+                    const result = await response.json();
+                    showAlert('🎉 ' + result.message, 'success');
+                    
+                    // Refresh dashboard data
+                    setTimeout(() => {
+                        loadDashboardData();
+                    }, 1000);
+                } else {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Migration failed');
+                }
+            } catch (error) {
+                console.error('Migration error:', error);
+                showAlert('❌ Migration failed: ' + error.message, 'danger');
+            } finally {
+                button.innerHTML = originalText;
+                button.disabled = false;
+            }
+        }
+
+        // System status function
+        async function showSystemStatus() {
+            const button = event.target;
+            const originalText = button.innerHTML;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+            button.disabled = true;
+            
+            try {
+                const response = await apiCall('/api/admin/system/status');
+                
+                if (response && response.ok) {
+                    const status = await response.json();
+                    displaySystemStatus(status);
+                } else {
+                    throw new Error('Failed to get system status');
+                }
+            } catch (error) {
+                console.error('System status error:', error);
+                showAlert('❌ Failed to get system status: ' + error.message, 'danger');
+            } finally {
+                button.innerHTML = originalText;
+                button.disabled = false;
+            }
+        }
+
+        function displaySystemStatus(status) {
+            const statusHtml = `
+                <div style="font-family: monospace; background: #f8f9fa; padding: 1rem; border-radius: 8px; margin: 1rem 0;">
+                    <h4 style="margin-bottom: 1rem; color: #2c3e50;">🔍 System Status Report</h4>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <div>
+                            <strong>📊 Database:</strong><br>
+                            Status: <span style="color: ${status.database.status === 'healthy' ? '#27ae60' : '#e74c3c'}">${status.database.status}</span><br>
+                            Type: ${status.config.is_postgres ? 'PostgreSQL ✅' : 'SQLite ⚠️'}<br>
+                            URL Configured: ${status.database.url_configured ? 'Yes ✅' : 'No ❌'}
+                        </div>
+                        
+                        <div>
+                            <strong>⚡ Cache (Redis):</strong><br>
+                            Status: <span style="color: ${status.redis.status === 'healthy' ? '#27ae60' : status.redis.status === 'not_configured' ? '#f39c12' : '#e74c3c'}">${status.redis.status}</span><br>
+                            URL Configured: ${status.redis.url_configured ? 'Yes ✅' : 'No ⚠️'}
+                        </div>
+                    </div>
+                    
+                    <div style="margin: 1rem 0;">
+                        <strong>🔄 Migrations:</strong><br>
+                        Status: <span style="color: ${status.migrations.status === 'table_exists' ? '#27ae60' : '#e74c3c'}">${status.migrations.status}</span><br>
+                        Version: ${status.migrations.latest_version}/${status.migrations.expected_version}
+                        ${status.migrations.latest_version >= status.migrations.expected_version ? ' ✅' : ' ⚠️ (Run migration!)'}
+                    </div>
+                    
+                    <div style="margin: 1rem 0;">
+                        <strong>📋 Critical Columns:</strong><br>
+                        ${Object.entries(status.column_checks).map(([col, stat]) => 
+                            `${col}: <span style="color: ${stat === 'exists' ? '#27ae60' : '#e74c3c'}">${stat}</span>`
+                        ).join('<br>')}
+                    </div>
+                    
+                    <div style="margin: 1rem 0;">
+                        <strong>⚙️ Configuration:</strong><br>
+                        App Version: ${status.config.app_version}<br>
+                        Log Level: ${status.config.log_level}<br>
+                        Generated: ${new Date(status.timestamp).toLocaleString()}
+                    </div>
+                </div>
+            `;
+            
+            showAlert(statusHtml, 'info');
         }
 
         // Utility functions
