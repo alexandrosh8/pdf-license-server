@@ -1,4 +1,4 @@
-# app_enhanced.py - Enhanced License Server with PostgreSQL Support and All Fixes
+# app.py - Enhanced License Server with PostgreSQL Support and All Fixes
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 import hashlib
 import json
@@ -50,34 +50,6 @@ def get_or_create_encryption_key():
 # Initialize encryption
 ENCRYPTION_KEY = get_or_create_encryption_key()
 fernet = Fernet(ENCRYPTION_KEY)
-
-def encrypt_license_key(license_key):
-    """Encrypt a license key for storage."""
-    return fernet.encrypt(license_key.encode()).decode()
-
-def decrypt_license_key(encrypted_key):
-    """Decrypt a license key from storage."""
-    try:
-        return fernet.decrypt(encrypted_key.encode()).decode()
-    except:
-        # If decryption fails, assume it's not encrypted (migration)
-        return encrypted_key
-
-def get_real_ip():
-    """Get the real client IP address, handling proxies."""
-    forwarded_for = request.headers.get('X-Forwarded-For')
-    if forwarded_for:
-        return forwarded_for.split(',')[0].strip()
-    
-    real_ip = request.headers.get('X-Real-IP')
-    if real_ip:
-        return real_ip
-    
-    forwarded = request.headers.get('X-Forwarded')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    
-    return request.remote_addr or 'unknown'
 
 def init_db():
     """Initialize the license database with enhanced schema."""
@@ -190,6 +162,46 @@ def init_db():
         
         conn.commit()
         conn.close()
+
+# ===== CRITICAL FIX: Initialize Database on App Start =====
+# This ensures database tables are created when the app starts with Gunicorn
+try:
+    print("🔧 Initializing database tables...")
+    init_db()
+    print("✅ Database tables created/verified successfully")
+    print(f"🗄️ Database type: {'PostgreSQL' if USE_POSTGRES else 'SQLite'}")
+except Exception as e:
+    print(f"❌ Database initialization failed: {e}")
+    # Don't crash the app, let it continue and show the error in the admin panel
+# ===== END CRITICAL FIX =====
+
+def encrypt_license_key(license_key):
+    """Encrypt a license key for storage."""
+    return fernet.encrypt(license_key.encode()).decode()
+
+def decrypt_license_key(encrypted_key):
+    """Decrypt a license key from storage."""
+    try:
+        return fernet.decrypt(encrypted_key.encode()).decode()
+    except:
+        # If decryption fails, assume it's not encrypted (migration)
+        return encrypted_key
+
+def get_real_ip():
+    """Get the real client IP address, handling proxies."""
+    forwarded_for = request.headers.get('X-Forwarded-For')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    
+    real_ip = request.headers.get('X-Real-IP')
+    if real_ip:
+        return real_ip
+    
+    forwarded = request.headers.get('X-Forwarded')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    
+    return request.remote_addr or 'unknown'
 
 @contextmanager
 def get_db():
@@ -1544,3 +1556,15 @@ CHECK_RESULT_HTML = '''
 </body>
 </html>
 '''
+
+if __name__ == '__main__':
+    print("🚀 Starting PDF License Server v1.2.0")
+    print(f"🗄️ Database: {'PostgreSQL' if USE_POSTGRES else 'SQLite'}")
+    print("🔧 Database already initialized at module level")
+    
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🌐 Server starting on port {port}")
+    print(f"🔐 Admin credentials: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
+    print("=" * 50)
+    
+    app.run(host='0.0.0.0', port=port, debug=False)
