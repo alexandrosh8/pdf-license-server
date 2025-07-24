@@ -1,4 +1,4 @@
-# app.py - Admin-Only License Server with Hardware ID Support - Enhanced Security
+# app_enhanced.py - Enhanced License Server with Encrypted License Keys
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 import hashlib
 import json
@@ -8,23 +8,54 @@ from datetime import datetime, timedelta
 import os
 import sqlite3
 from contextlib import contextmanager
+from cryptography.fernet import Fernet
+import base64
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
-# Admin credentials - CHANGE THESE!
+# Admin credentials
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
 # Database setup
 DATABASE = 'licenses.db'
 
+# Encryption key for license keys - generate once and save
+ENCRYPTION_KEY_FILE = '.encryption_key'
+
+def get_or_create_encryption_key():
+    """Get or create the encryption key for license keys."""
+    if os.path.exists(ENCRYPTION_KEY_FILE):
+        with open(ENCRYPTION_KEY_FILE, 'rb') as f:
+            return f.read()
+    else:
+        # Generate new key
+        key = Fernet.generate_key()
+        with open(ENCRYPTION_KEY_FILE, 'wb') as f:
+            f.write(key)
+        return key
+
+# Initialize encryption
+ENCRYPTION_KEY = get_or_create_encryption_key()
+fernet = Fernet(ENCRYPTION_KEY)
+
+def encrypt_license_key(license_key):
+    """Encrypt a license key for storage."""
+    return fernet.encrypt(license_key.encode()).decode()
+
+def decrypt_license_key(encrypted_key):
+    """Decrypt a license key from storage."""
+    try:
+        return fernet.decrypt(encrypted_key.encode()).decode()
+    except:
+        # If decryption fails, assume it's not encrypted (migration)
+        return encrypted_key
+
 def get_real_ip():
     """Get the real client IP address, handling proxies."""
-    # Try various headers that proxies/load balancers use
     forwarded_for = request.headers.get('X-Forwarded-For')
     if forwarded_for:
-        # X-Forwarded-For can contain multiple IPs, first one is the original client
         return forwarded_for.split(',')[0].strip()
     
     real_ip = request.headers.get('X-Real-IP')
@@ -35,16 +66,18 @@ def get_real_ip():
     if forwarded:
         return forwarded.split(',')[0].strip()
     
-    # Fallback to request.remote_addr
     return request.remote_addr or 'unknown'
 
 def init_db():
-    """Initialize the license database."""
+    """Initialize the license database with enhanced schema."""
     conn = sqlite3.connect(DATABASE)
+    
+    # Create licenses table with encrypted license key
     conn.execute('''
         CREATE TABLE IF NOT EXISTS licenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            license_key TEXT UNIQUE NOT NULL,
+            license_key_encrypted TEXT UNIQUE NOT NULL,
+            license_key_hash TEXT UNIQUE NOT NULL,
             hardware_id TEXT,
             customer_email TEXT,
             customer_name TEXT,
@@ -53,13 +86,18 @@ def init_db():
             payment_id TEXT,
             active INTEGER DEFAULT 1,
             last_used TEXT,
-            notes TEXT
+            notes TEXT,
+            activation_count INTEGER DEFAULT 0,
+            last_activation_date TEXT,
+            previously_bound_hardware TEXT
         )
     ''')
+    
+    # Create validation logs table
     conn.execute('''
         CREATE TABLE IF NOT EXISTS validation_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            license_key TEXT,
+            license_key_hash TEXT,
             hardware_id TEXT,
             timestamp TEXT,
             status TEXT,
@@ -68,6 +106,20 @@ def init_db():
             details TEXT
         )
     ''')
+    
+    # Create remembered licenses table (for tracking reactivations)
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS license_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            license_key_hash TEXT,
+            hardware_id TEXT,
+            action TEXT,
+            timestamp TEXT,
+            ip_address TEXT,
+            details TEXT
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -81,15 +133,19 @@ def get_db():
     finally:
         conn.close()
 
+def hash_license_key(license_key):
+    """Create a hash of the license key for lookups."""
+    return hashlib.sha256(license_key.encode()).hexdigest()
+
 def log_validation_attempt(license_key, hardware_id, status, details=None):
     """Log a validation attempt with enhanced information."""
     try:
         with get_db() as conn:
             conn.execute('''
-                INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address, user_agent, details)
+                INSERT INTO validation_logs (license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
-                license_key, 
+                hash_license_key(license_key) if license_key else None, 
                 hardware_id, 
                 datetime.now().isoformat(), 
                 status, 
@@ -101,6 +157,25 @@ def log_validation_attempt(license_key, hardware_id, status, details=None):
     except Exception as e:
         print(f"Failed to log validation attempt: {e}")
 
+def log_license_history(license_key, hardware_id, action, details=None):
+    """Log license history for tracking reactivations."""
+    try:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT INTO license_history (license_key_hash, hardware_id, action, timestamp, ip_address, details)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                hash_license_key(license_key) if license_key else None,
+                hardware_id,
+                action,
+                datetime.now().isoformat(),
+                get_real_ip(),
+                details
+            ))
+            conn.commit()
+    except Exception as e:
+        print(f"Failed to log license history: {e}")
+
 def generate_license_key():
     """Generate a unique license key."""
     def random_segment():
@@ -109,19 +184,25 @@ def generate_license_key():
     return f"PDFM-{random_segment()}-{random_segment()}-{random_segment()}"
 
 def create_monthly_license(customer_email, customer_name=None, hardware_id=None, payment_id=None, notes=None):
-    """Create a new monthly license with optional hardware_id."""
+    """Create a new monthly license with encryption."""
     license_key = generate_license_key()
     created_date = datetime.now()
-    expiry_date = created_date + timedelta(days=30)  # Monthly license
+    expiry_date = created_date + timedelta(days=30)
+    
+    # Encrypt the license key for storage
+    encrypted_key = encrypt_license_key(license_key)
+    key_hash = hash_license_key(license_key)
     
     with get_db() as conn:
         conn.execute('''
-            INSERT INTO licenses (license_key, hardware_id, customer_email, customer_name, 
-                                created_date, expiry_date, payment_id, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (license_key, hardware_id, customer_email, customer_name, 
+            INSERT INTO licenses (license_key_encrypted, license_key_hash, hardware_id, customer_email, 
+                                customer_name, created_date, expiry_date, payment_id, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (encrypted_key, key_hash, hardware_id, customer_email, customer_name, 
               created_date.isoformat(), expiry_date.isoformat(), payment_id, notes))
         conn.commit()
+    
+    log_license_history(license_key, hardware_id, 'CREATED', f'New license for {customer_email}')
     
     return {
         'license_key': license_key,
@@ -135,12 +216,12 @@ def require_admin():
     return session.get('admin_logged_in') == True
 
 # =============================================================================
-# PUBLIC API ENDPOINTS (for PDF application)
+# PUBLIC API ENDPOINTS
 # =============================================================================
 
 @app.route('/api/validate', methods=['POST'])
 def validate_license():
-    """Validate a license key from the desktop application - Enhanced Security."""
+    """Enhanced validation that remembers previous hardware bindings."""
     try:
         data = request.get_json()
         license_key = data.get('license_key')
@@ -148,88 +229,94 @@ def validate_license():
         
         if not license_key:
             log_validation_attempt('', hardware_id, 'MISSING_KEY', 'No license key provided')
-            return jsonify({
-                "valid": False,
-                "reason": "Missing license key"
-            }), 400
+            return jsonify({"valid": False, "reason": "Missing license key"}), 400
         
         if not hardware_id:
             log_validation_attempt(license_key, '', 'MISSING_HARDWARE_ID', 'No hardware ID provided')
-            return jsonify({
-                "valid": False,
-                "reason": "Missing hardware ID"
-            }), 400
+            return jsonify({"valid": False, "reason": "Missing hardware ID"}), 400
+        
+        # Hash the license key for lookup
+        key_hash = hash_license_key(license_key)
         
         with get_db() as conn:
+            # Find license by hash
             license_row = conn.execute(
-                'SELECT * FROM licenses WHERE license_key = ?',
-                (license_key,)
+                'SELECT * FROM licenses WHERE license_key_hash = ?',
+                (key_hash,)
             ).fetchone()
             
             if not license_row:
-                log_validation_attempt(license_key, hardware_id, 'INVALID_KEY', 'License key not found in database')
-                return jsonify({
-                    "valid": False,
-                    "reason": "Invalid license key"
-                }), 400
+                log_validation_attempt(license_key, hardware_id, 'INVALID_KEY', 'License key not found')
+                return jsonify({"valid": False, "reason": "Invalid license key"}), 400
             
-            # CRITICAL: Check if license is active (prevent deactivated licenses from working)
+            # Check if license is active
             if not license_row['active']:
-                log_validation_attempt(license_key, hardware_id, 'DEACTIVATED', 'License has been deactivated by admin')
-                return jsonify({
-                    "valid": False,
-                    "reason": "License has been deactivated"
-                }), 400
+                log_validation_attempt(license_key, hardware_id, 'DEACTIVATED', 'License deactivated')
+                return jsonify({"valid": False, "reason": "License has been deactivated"}), 400
             
-            # Check expiration (CRITICAL: Prevent expired licenses from working)
+            # Check expiration
             expiry_date = datetime.fromisoformat(license_row['expiry_date'])
             current_date = datetime.now()
             
             if current_date > expiry_date:
-                log_validation_attempt(license_key, hardware_id, 'EXPIRED', f"License expired on {license_row['expiry_date']}")
+                log_validation_attempt(license_key, hardware_id, 'EXPIRED', f"Expired on {license_row['expiry_date']}")
                 return jsonify({
                     "valid": False,
                     "reason": "License expired",
                     "expired_date": license_row['expiry_date']
                 }), 400
             
-            # Check hardware binding (CRITICAL SECURITY)
-            if license_row['hardware_id'] and hardware_id:
-                if license_row['hardware_id'] != hardware_id:
-                    log_validation_attempt(
-                        license_key, 
-                        hardware_id, 
-                        'HARDWARE_MISMATCH', 
-                        f"Expected: {license_row['hardware_id']}, Got: {hardware_id}"
-                    )
-                    return jsonify({
-                        "valid": False,
-                        "reason": "License not valid for this hardware"
-                    }), 400
+            # Check hardware binding
+            stored_hw_id = license_row['hardware_id']
+            previously_bound = license_row['previously_bound_hardware']
             
-            # Update hardware ID and last used (if not set or if it matches)
-            if not license_row['hardware_id']:
-                # First time use - bind to this hardware
-                conn.execute(
-                    'UPDATE licenses SET hardware_id = ?, last_used = ? WHERE license_key = ?',
-                    (hardware_id, datetime.now().isoformat(), license_key)
-                )
+            # If no hardware ID set, bind to this one
+            if not stored_hw_id:
+                conn.execute('''
+                    UPDATE licenses 
+                    SET hardware_id = ?, last_used = ?, activation_count = activation_count + 1,
+                        last_activation_date = ?
+                    WHERE license_key_hash = ?
+                ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
                 conn.commit()
+                
                 log_validation_attempt(license_key, hardware_id, 'VALID_FIRST_USE', 'License bound to hardware')
-            elif license_row['hardware_id'] == hardware_id:
-                # Valid hardware match - update last used
-                conn.execute(
-                    'UPDATE licenses SET last_used = ? WHERE license_key = ?',
-                    (datetime.now().isoformat(), license_key)
-                )
-                conn.commit()
-                log_validation_attempt(license_key, hardware_id, 'VALID', 'License validation successful')
+                log_license_history(license_key, hardware_id, 'BOUND', 'First hardware binding')
+                
+            # If hardware matches current or previous binding
+            elif stored_hw_id == hardware_id or (previously_bound and hardware_id in previously_bound):
+                # Update current hardware if it was previously bound
+                if stored_hw_id != hardware_id and previously_bound and hardware_id in previously_bound:
+                    conn.execute('''
+                        UPDATE licenses 
+                        SET hardware_id = ?, last_used = ?, activation_count = activation_count + 1,
+                            last_activation_date = ?
+                        WHERE license_key_hash = ?
+                    ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
+                    conn.commit()
+                    
+                    log_validation_attempt(license_key, hardware_id, 'VALID_REACTIVATION', 'Previously bound hardware')
+                    log_license_history(license_key, hardware_id, 'REACTIVATED', 'Hardware rebound')
+                else:
+                    # Just update last used
+                    conn.execute(
+                        'UPDATE licenses SET last_used = ? WHERE license_key_hash = ?',
+                        (datetime.now().isoformat(), key_hash)
+                    )
+                    conn.commit()
+                    log_validation_attempt(license_key, hardware_id, 'VALID', 'License validation successful')
+                    
             else:
-                # This should not happen due to earlier check, but just in case
-                log_validation_attempt(license_key, hardware_id, 'SECURITY_ERROR', 'Unexpected hardware mismatch')
+                # Hardware mismatch
+                log_validation_attempt(
+                    license_key, 
+                    hardware_id, 
+                    'HARDWARE_MISMATCH', 
+                    f"Expected: {stored_hw_id}, Got: {hardware_id}"
+                )
                 return jsonify({
                     "valid": False,
-                    "reason": "Security validation failed"
+                    "reason": "License not valid for this hardware"
                 }), 400
             
             days_remaining = (expiry_date - current_date).days
@@ -243,7 +330,6 @@ def validate_license():
             })
             
     except Exception as e:
-        # Log server errors for debugging
         log_validation_attempt(
             data.get('license_key', '') if 'data' in locals() else '',
             data.get('hardware_id', '') if 'data' in locals() else '',
@@ -259,10 +345,14 @@ def validate_license():
 @app.route('/check/<license_key>')
 def check_license(license_key):
     """Public license check for customer support."""
+    key_hash = hash_license_key(license_key)
+    
     with get_db() as conn:
         license_row = conn.execute(
-            'SELECT license_key, customer_email, created_date, expiry_date, active FROM licenses WHERE license_key = ?',
-            (license_key,)
+            '''SELECT license_key_hash, customer_email, created_date, expiry_date, active, 
+                      hardware_id, activation_count, last_activation_date
+               FROM licenses WHERE license_key_hash = ?''',
+            (key_hash,)
         ).fetchone()
         
         if not license_row:
@@ -281,19 +371,23 @@ def check_license(license_key):
         
         days_remaining = (expiry_date - current_date).days if status == "valid" else 0
         
+        # Enhanced info
+        license_info_dict = dict(license_row)
+        license_info_dict['license_key'] = license_key  # Add the actual key for display
+        
         return render_template_string(CHECK_RESULT_HTML, 
                                     status=status, 
-                                    license_info=license_row,
+                                    license_info=license_info_dict,
                                     days_remaining=days_remaining,
                                     license_key=license_key)
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint for monitoring."""
+    """Health check endpoint."""
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.0.0"
+        "version": "1.1.0"
     })
 
 # =============================================================================
@@ -331,30 +425,35 @@ def logout():
 
 @app.route('/admin')
 def admin():
-    """Admin dashboard with enhanced security information."""
+    """Enhanced admin dashboard."""
     if not require_admin():
         return redirect('/')
     
     try:
         with get_db() as conn:
-            # Get licenses with calculated status
+            # Get licenses with decrypted keys
             licenses_raw = conn.execute('''
-                SELECT license_key, hardware_id, customer_email, customer_name, created_date, 
-                       expiry_date, active, last_used, notes
+                SELECT license_key_encrypted, license_key_hash, hardware_id, customer_email, 
+                       customer_name, created_date, expiry_date, active, last_used, notes,
+                       activation_count, last_activation_date, previously_bound_hardware
                 FROM licenses 
                 ORDER BY created_date DESC
             ''').fetchall()
             
-            print(f"DEBUG: Found {len(licenses_raw)} licenses in database")
-            
-            # Process licenses to add calculated status
+            # Process licenses
             licenses = []
             current_time = datetime.now()
             
             for license_row in licenses_raw:
                 license_dict = dict(license_row)
                 
-                # Calculate actual status
+                # Decrypt the license key
+                try:
+                    license_dict['license_key'] = decrypt_license_key(license_row['license_key_encrypted'])
+                except:
+                    license_dict['license_key'] = 'DECRYPTION_ERROR'
+                
+                # Calculate status
                 expiry_date = datetime.fromisoformat(license_row['expiry_date'])
                 if not license_row['active']:
                     license_dict['calculated_status'] = 'deactivated'
@@ -364,25 +463,35 @@ def admin():
                     license_dict['calculated_status'] = 'active'
                 
                 licenses.append(license_dict)
-                print(f"DEBUG: License {license_row['license_key'][:20]}... - Active: {license_row['active']}, Status: {license_dict['calculated_status']}")
             
+            # Get statistics
             stats = conn.execute('''
                 SELECT 
                     COUNT(*) as total_licenses,
                     COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
                     COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses,
-                    COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses
+                    COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses,
+                    SUM(activation_count) as total_activations
                 FROM licenses
             ''').fetchone()
             
+            # Recent validations
             recent_validations = conn.execute('''
-                SELECT license_key, hardware_id, timestamp, status, ip_address, user_agent, details
+                SELECT license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details
                 FROM validation_logs 
                 ORDER BY timestamp DESC 
                 LIMIT 50
             ''').fetchall()
             
-            # Security summary
+            # Process validations to show partial license keys
+            validations = []
+            for val_row in recent_validations:
+                val_dict = dict(val_row)
+                # Show first 20 chars of the hash as identifier
+                val_dict['license_identifier'] = val_row['license_key_hash'][:20] if val_row['license_key_hash'] else 'N/A'
+                validations.append(val_dict)
+            
+            # Security stats
             security_stats = conn.execute('''
                 SELECT 
                     status,
@@ -396,7 +505,7 @@ def admin():
         return render_template_string(ADMIN_HTML, 
                                     licenses=licenses, 
                                     stats=stats, 
-                                    validations=recent_validations,
+                                    validations=validations,
                                     security_stats=security_stats)
     except Exception as e:
         print(f"ERROR: Admin dashboard failed: {str(e)}")
@@ -406,24 +515,23 @@ def admin():
 
 @app.route('/admin/create', methods=['GET', 'POST'])
 def admin_create_license():
-    """Create new license (admin only)."""
+    """Create new license."""
     if not require_admin():
         return redirect('/')
     
     if request.method == 'POST':
         customer_email = request.form.get('email')
         customer_name = request.form.get('name')
-        hardware_id = request.form.get('hardware_id')  # Hardware ID from form
+        hardware_id = request.form.get('hardware_id')
         payment_id = request.form.get('payment_id')
         notes = request.form.get('notes')
         
         if not customer_email:
             return render_template_string(CREATE_LICENSE_HTML, error="Email is required")
         
-        # Validate hardware_id if provided
         if hardware_id and len(hardware_id) != 16:
             return render_template_string(CREATE_LICENSE_HTML, 
-                                        error="Hardware ID must be exactly 16 characters (leave empty if unknown)")
+                                        error="Hardware ID must be exactly 16 characters")
         
         license_info = create_monthly_license(customer_email, customer_name, hardware_id, payment_id, notes)
         
@@ -431,16 +539,64 @@ def admin_create_license():
     
     return render_template_string(CREATE_LICENSE_HTML)
 
-@app.route('/admin/extend/<license_key>', methods=['POST'])
-def extend_license(license_key):
-    """Extend license by 30 days (admin only)."""
+@app.route('/admin/transfer/<license_key>', methods=['POST'])
+def transfer_license(license_key):
+    """Transfer license to new hardware (remember old hardware)."""
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
     
+    new_hardware_id = request.form.get('new_hardware_id')
+    if not new_hardware_id or len(new_hardware_id) != 16:
+        return jsonify({'error': 'Invalid hardware ID'}), 400
+    
+    key_hash = hash_license_key(license_key)
+    
+    with get_db() as conn:
+        # Get current hardware ID
+        current = conn.execute(
+            'SELECT hardware_id, previously_bound_hardware FROM licenses WHERE license_key_hash = ?',
+            (key_hash,)
+        ).fetchone()
+        
+        if not current:
+            return jsonify({'error': 'License not found'}), 404
+        
+        old_hw_id = current['hardware_id']
+        prev_bound = current['previously_bound_hardware'] or ''
+        
+        # Add old hardware to previously bound list
+        if old_hw_id and old_hw_id not in prev_bound:
+            if prev_bound:
+                prev_bound += f",{old_hw_id}"
+            else:
+                prev_bound = old_hw_id
+        
+        # Update to new hardware
+        conn.execute('''
+            UPDATE licenses 
+            SET hardware_id = ?, previously_bound_hardware = ?, 
+                last_activation_date = ?
+            WHERE license_key_hash = ?
+        ''', (new_hardware_id, prev_bound, datetime.now().isoformat(), key_hash))
+        conn.commit()
+        
+        log_license_history(license_key, new_hardware_id, 'TRANSFERRED', 
+                          f'From {old_hw_id} to {new_hardware_id}')
+    
+    return redirect('/admin')
+
+@app.route('/admin/extend/<license_key>', methods=['POST'])
+def extend_license(license_key):
+    """Extend license by 30 days."""
+    if not require_admin():
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    key_hash = hash_license_key(license_key)
+    
     with get_db() as conn:
         current_expiry = conn.execute(
-            'SELECT expiry_date FROM licenses WHERE license_key = ?',
-            (license_key,)
+            'SELECT expiry_date FROM licenses WHERE license_key_hash = ?',
+            (key_hash,)
         ).fetchone()
         
         if not current_expiry:
@@ -450,102 +606,105 @@ def extend_license(license_key):
         new_expiry_date = max(current_expiry_date, datetime.now()) + timedelta(days=30)
         
         conn.execute(
-            'UPDATE licenses SET expiry_date = ?, active = 1 WHERE license_key = ?',
-            (new_expiry_date.isoformat(), license_key)
+            'UPDATE licenses SET expiry_date = ?, active = 1 WHERE license_key_hash = ?',
+            (new_expiry_date.isoformat(), key_hash)
         )
         conn.commit()
+        
+        log_license_history(license_key, 'ADMIN', 'EXTENDED', 
+                          f'Extended to {new_expiry_date.strftime("%Y-%m-%d")}')
     
     return redirect('/admin')
 
 @app.route('/admin/deactivate/<license_key>', methods=['POST'])
 def deactivate_license(license_key):
-    """Deactivate license (admin only) - ENHANCED SECURITY."""
+    """Deactivate license (can be reactivated)."""
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
     
+    key_hash = hash_license_key(license_key)
+    
     try:
         with get_db() as conn:
-            # Check if license exists first
             existing = conn.execute(
-                'SELECT license_key, active FROM licenses WHERE license_key = ?',
-                (license_key,)
+                'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = ?',
+                (key_hash,)
             ).fetchone()
             
             if not existing:
-                print(f"ERROR: License {license_key} not found for deactivation")
                 return jsonify({'error': 'License not found'}), 404
             
-            # Deactivate the license
-            result = conn.execute(
-                'UPDATE licenses SET active = 0 WHERE license_key = ?',
-                (license_key,)
+            conn.execute(
+                'UPDATE licenses SET active = 0 WHERE license_key_hash = ?',
+                (key_hash,)
             )
             conn.commit()
             
-            print(f"SUCCESS: Deactivated license {license_key} (rows affected: {result.rowcount})")
-            
-            # Log the deactivation for audit trail
-            log_validation_attempt(license_key, 'ADMIN', 'DEACTIVATED_BY_ADMIN', f'License manually deactivated by admin from IP: {get_real_ip()}')
+            log_validation_attempt(license_key, 'ADMIN', 'DEACTIVATED_BY_ADMIN', 
+                                 f'Admin action from IP: {get_real_ip()}')
+            log_license_history(license_key, 'ADMIN', 'DEACTIVATED', 'Admin deactivation')
         
         return redirect('/admin')
     except Exception as e:
-        print(f"ERROR: Failed to deactivate license {license_key}: {str(e)}")
-        return jsonify({'error': f'Failed to deactivate license: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to deactivate: {str(e)}'}), 500
 
 @app.route('/admin/activate/<license_key>', methods=['POST'])
 def activate_license(license_key):
-    """Activate license (admin only)."""
+    """Activate/reactivate license."""
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
+    
+    key_hash = hash_license_key(license_key)
     
     try:
         with get_db() as conn:
-            # Check if license exists first
             existing = conn.execute(
-                'SELECT license_key, active FROM licenses WHERE license_key = ?',
-                (license_key,)
+                'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = ?',
+                (key_hash,)
             ).fetchone()
             
             if not existing:
-                print(f"ERROR: License {license_key} not found for activation")
                 return jsonify({'error': 'License not found'}), 404
             
-            # Activate the license
-            result = conn.execute(
-                'UPDATE licenses SET active = 1 WHERE license_key = ?',
-                (license_key,)
+            conn.execute(
+                'UPDATE licenses SET active = 1 WHERE license_key_hash = ?',
+                (key_hash,)
             )
             conn.commit()
             
-            print(f"SUCCESS: Activated license {license_key} (rows affected: {result.rowcount})")
-            
-            # Log the activation for audit trail
-            log_validation_attempt(license_key, 'ADMIN', 'ACTIVATED_BY_ADMIN', f'License manually activated by admin from IP: {get_real_ip()}')
+            log_validation_attempt(license_key, 'ADMIN', 'ACTIVATED_BY_ADMIN', 
+                                 f'Admin action from IP: {get_real_ip()}')
+            log_license_history(license_key, 'ADMIN', 'ACTIVATED', 'Admin activation')
         
         return redirect('/admin')
     except Exception as e:
-        print(f"ERROR: Failed to activate license {license_key}: {str(e)}")
-        return jsonify({'error': f'Failed to activate license: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to activate: {str(e)}'}), 500
 
 @app.route('/admin/delete/<license_key>', methods=['POST'])
 def delete_license(license_key):
-    """Delete license permanently (admin only) - BE CAREFUL!"""
+    """Delete license permanently."""
     if not require_admin():
         return jsonify({'error': 'Unauthorized'}), 401
     
+    key_hash = hash_license_key(license_key)
+    
     with get_db() as conn:
-        # Log before deletion
-        log_validation_attempt(license_key, 'ADMIN', 'DELETED_BY_ADMIN', f'License permanently deleted by admin from IP: {get_real_ip()}')
+        log_validation_attempt(license_key, 'ADMIN', 'DELETED_BY_ADMIN', 
+                             f'Permanent deletion from IP: {get_real_ip()}')
+        log_license_history(license_key, 'ADMIN', 'DELETED', 'Permanently deleted')
         
-        # Delete the license
-        conn.execute('DELETE FROM licenses WHERE license_key = ?', (license_key,))
+        conn.execute('DELETE FROM licenses WHERE license_key_hash = ?', (key_hash,))
         conn.commit()
     
     return redirect('/admin')
 
-# =============================================================================
-# HTML TEMPLATES (Enhanced)
-# =============================================================================
+# [Include all the HTML templates from the original, with minor modifications for the enhanced features]
+
+# Enhanced templates would include:
+# - Show activation count and last activation date
+# - Option to transfer license to new hardware
+# - Show previously bound hardware IDs
+# - Enhanced security status display
 
 LOGIN_HTML = '''
 <!DOCTYPE html>
@@ -564,6 +723,7 @@ LOGIN_HTML = '''
         .error { color: #e53e3e; margin: 10px 0; padding: 10px; background: #fed7d7; border-radius: 5px; }
         .header { text-align: center; margin-bottom: 30px; }
         .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+        .version { background: #667eea; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; }
     </style>
 </head>
 <body>
@@ -571,6 +731,7 @@ LOGIN_HTML = '''
         <div class="header">
             <h2>🔐 Admin Login</h2>
             <p>PDF License Server Administration</p>
+            <span class="version">v1.1.0</span>
         </div>
         
         {% if error %}
@@ -595,12 +756,19 @@ LOGIN_HTML = '''
         
         <div class="footer">
             Admin access only • Authorized personnel only<br>
-            Server IP: {{ server_ip }}
+            Server IP: {{ server_ip }}<br>
+            🔒 License keys encrypted at rest
         </div>
     </div>
 </body>
 </html>
 '''
+
+# [Include the rest of the HTML templates - they remain largely the same]
+# The main changes would be in the ADMIN_HTML template to show:
+# - Activation count
+# - Previously bound hardware
+# - Transfer license option
 
 ADMIN_HTML = '''
 <!DOCTYPE html>
@@ -634,13 +802,14 @@ ADMIN_HTML = '''
         .security-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 15px 0; }
         .security-stat { background: #f8f9fa; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #667eea; }
         .ip-address { font-family: 'Courier New', monospace; background: #fff3cd; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
+        .activation-info { background: #e6f4ff; padding: 4px 8px; border-radius: 4px; font-size: 11px; }
     </style>
 </head>
 <body>
     <div class="header">
         <div>
             <h1>🔐 License Administration</h1>
-            <p>PDF Metadata Tool License Management</p>
+            <p>PDF Metadata Tool License Management v1.1.0</p>
         </div>
         <div>
             <a href="/admin/create" class="btn btn-success">+ Create License</a>
@@ -666,6 +835,10 @@ ADMIN_HTML = '''
                 <div class="stat-number">{{ stats.expired_licenses }}</div>
                 <div class="stat-label">Expired</div>
             </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.total_activations or 0 }}</div>
+                <div class="stat-label">Total Activations</div>
+            </div>
         </div>
         
         {% if security_stats %}
@@ -690,6 +863,7 @@ ADMIN_HTML = '''
                     <th>Created</th>
                     <th>Expires</th>
                     <th>Status</th>
+                    <th>Activations</th>
                     <th>Last Used</th>
                     <th>Actions</th>
                 </tr>
@@ -701,6 +875,9 @@ ADMIN_HTML = '''
                     <td>
                         {% if license.hardware_id %}
                             <span class="hardware-id">{{ license.hardware_id }}</span>
+                            {% if license.previously_bound_hardware %}
+                                <br><small style="color: #999;">Previously: {{ license.previously_bound_hardware[:20] }}...</small>
+                            {% endif %}
                         {% else %}
                             <span style="color: #999; font-style: italic;">Not Set</span>
                         {% endif %}
@@ -717,6 +894,14 @@ ADMIN_HTML = '''
                         {% else %}
                             <span class="inactive">● Deactivated</span>
                         {% endif %}
+                    </td>
+                    <td>
+                        <span class="activation-info">
+                            {{ license.activation_count or 0 }}x
+                            {% if license.last_activation_date %}
+                                <br><small>{{ license.last_activation_date[:10] }}</small>
+                            {% endif %}
+                        </span>
                     </td>
                     <td>{{ license.last_used[:10] if license.last_used else 'Never' }}</td>
                     <td>
@@ -739,7 +924,7 @@ ADMIN_HTML = '''
                         </form>
                         
                         <form method="POST" action="/admin/delete/{{ license.license_key }}" style="display: inline;">
-                            <button type="submit" class="btn btn-danger" onclick="return confirm('🗑️ PERMANENTLY DELETE license {{ license.license_key }}?\\n\\n⚠️ WARNING: This CANNOT be undone!\\n⚠️ The license will be completely removed from the database!\\n⚠️ The user will lose access permanently!\\n\\nOnly do this for refunds or permanent bans.\\n\\nAre you absolutely sure?') && confirm('🚨 FINAL WARNING 🚨\\n\\nYou are about to PERMANENTLY DELETE license:\\n{{ license.license_key }}\\n\\nCustomer: {{ license.customer_email }}\\n\\nThis action CANNOT be reversed!\\nType DELETE in the next prompt to confirm.')" style="margin-left: 10px;">🗑️ DELETE</button>
+                            <button type="submit" class="btn btn-danger" onclick="return confirm('🗑️ PERMANENTLY DELETE license {{ license.license_key }}?\\n\\n⚠️ WARNING: This CANNOT be undone!\\n⚠️ The license will be completely removed from the database!\\n⚠️ The user will lose access permanently!\\n\\nOnly do this for refunds or permanent bans.\\n\\nAre you absolutely sure?')" style="margin-left: 10px;">🗑️ DELETE</button>
                         </form>
                     </td>
                 </tr>
@@ -751,7 +936,7 @@ ADMIN_HTML = '''
         <table>
             <thead>
                 <tr>
-                    <th>License Key</th>
+                    <th>License ID</th>
                     <th>Hardware ID</th>
                     <th>Timestamp</th>
                     <th>Status</th>
@@ -762,7 +947,7 @@ ADMIN_HTML = '''
             <tbody>
                 {% for validation in validations %}
                 <tr>
-                    <td><span class="license-key">{{ validation.license_key[:20] }}...</span></td>
+                    <td><span class="license-key">{{ validation.license_identifier }}...</span></td>
                     <td>
                         {% if validation.hardware_id and validation.hardware_id != 'ADMIN' %}
                             <span class="hardware-id">{{ validation.hardware_id }}</span>
@@ -772,7 +957,7 @@ ADMIN_HTML = '''
                     </td>
                     <td>{{ validation.timestamp[:19] }}</td>
                     <td>
-                        {% if validation.status == 'VALID' or validation.status == 'VALID_FIRST_USE' %}
+                        {% if validation.status in ['VALID', 'VALID_FIRST_USE', 'VALID_REACTIVATION'] %}
                             <span class="valid">{{ validation.status }}</span>
                         {% elif validation.status in ['HARDWARE_MISMATCH', 'EXPIRED', 'DEACTIVATED'] %}
                             <span class="security-error">{{ validation.status }}</span>
@@ -963,6 +1148,7 @@ CHECK_RESULT_HTML = '''
         .status-inactive { background: linear-gradient(135deg, #a8a8a8 0%, #d3d3d3 100%); color: #2d3748; }
         .status-box { padding: 30px; border-radius: 15px; margin: 20px 0; text-align: center; }
         .support-info { background: #e3f2fd; padding: 20px; border-radius: 10px; margin-top: 20px; border-left: 4px solid #2196f3; }
+        .info-item { background: #f8f9fa; padding: 10px; margin: 5px 0; border-radius: 8px; }
     </style>
 </head>
 <body>
@@ -976,6 +1162,12 @@ CHECK_RESULT_HTML = '''
             <p><strong>Days Remaining:</strong> {{ days_remaining }} days</p>
             <p><strong>Expires:</strong> {{ license_info.expiry_date[:10] }}</p>
             <p><strong>Customer:</strong> {{ license_info.customer_email }}</p>
+            {% if license_info.hardware_id %}
+            <p><strong>Bound to Hardware:</strong> {{ license_info.hardware_id }}</p>
+            {% endif %}
+            {% if license_info.activation_count %}
+            <p><strong>Activations:</strong> {{ license_info.activation_count }}</p>
+            {% endif %}
         </div>
         {% elif status == 'expired' %}
         <div class="status-box status-expired">
@@ -989,7 +1181,7 @@ CHECK_RESULT_HTML = '''
             <h2>⚠️ License Deactivated</h2>
             <p><strong>License Key:</strong> <code>{{ license_key }}</code></p>
             <p><strong>Customer:</strong> {{ license_info.customer_email }}</p>
-            <p>This license has been deactivated by administrator.</p>
+            <p>This license has been temporarily deactivated by administrator.</p>
         </div>
         {% else %}
         <div class="status-box status-not-found">
