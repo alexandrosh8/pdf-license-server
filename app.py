@@ -802,7 +802,9 @@ ADMIN_HTML = '''
         .security-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 15px 0; }
         .security-stat { background: #f8f9fa; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #667eea; }
         .ip-address { font-family: 'Courier New', monospace; background: #fff3cd; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
-        .activation-info { background: #e6f4ff; padding: 4px 8px; border-radius: 4px; font-size: 11px; }
+        .activation-info { background: #e6f4ff; padding: 4px 8px; border-radius: 4px; font-size: 11px; text-align: center; }
+        .activation-count { font-weight: bold; color: #1890ff; }
+        .activation-date { color: #666; font-size: 10px; }
     </style>
 </head>
 <body>
@@ -896,12 +898,14 @@ ADMIN_HTML = '''
                         {% endif %}
                     </td>
                     <td>
-                        <span class="activation-info">
-                            {{ license.activation_count or 0 }}x
+                        <div class="activation-info">
+                            <span class="activation-count">{{ license.activation_count or 0 }}</span>
                             {% if license.last_activation_date %}
-                                <br><small>{{ license.last_activation_date[:10] }}</small>
+                                <br><span class="activation-date">{{ license.last_activation_date[:10] }}</span>
+                            {% else %}
+                                <br><span class="activation-date">Never</span>
                             {% endif %}
-                        </span>
+                        </div>
                     </td>
                     <td>{{ license.last_used[:10] if license.last_used else 'Never' }}</td>
                     <td>
