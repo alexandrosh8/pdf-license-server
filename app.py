@@ -377,7 +377,7 @@ class DatabaseManager:
                 )
             """)
         else:
-            # SQLite schema
+            # SQLite schema - ensure proper types
             await self.database.execute("""
                 CREATE TABLE IF NOT EXISTS licenses (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -386,13 +386,13 @@ class DatabaseManager:
                     hardware_id VARCHAR(32),
                     customer_email VARCHAR(255) NOT NULL,
                     customer_name VARCHAR(255),
-                    created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    expiry_date DATETIME NOT NULL,
-                    last_validated DATETIME,
+                    created_date TEXT DEFAULT (datetime('now')),
+                    expiry_date TEXT NOT NULL,
+                    last_validated TEXT,
                     validation_count INTEGER DEFAULT 0,
                     hardware_changes INTEGER DEFAULT 0,
                     previous_hardware_ids TEXT,
-                    active BOOLEAN DEFAULT TRUE,
+                    active INTEGER DEFAULT 1,
                     payment_id VARCHAR(100),
                     notes TEXT,
                     metadata TEXT DEFAULT '{}'
@@ -404,7 +404,7 @@ class DatabaseManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     license_key_hash VARCHAR(64),
                     hardware_id VARCHAR(32),
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    timestamp TEXT DEFAULT (datetime('now')),
                     status VARCHAR(50) NOT NULL,
                     ip_address TEXT,
                     user_agent TEXT,
@@ -419,11 +419,11 @@ class DatabaseManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id VARCHAR(255) UNIQUE NOT NULL,
                     admin_username VARCHAR(100) NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    expires_at DATETIME NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    expires_at TEXT NOT NULL,
                     ip_address TEXT,
                     user_agent TEXT,
-                    active BOOLEAN DEFAULT TRUE
+                    active INTEGER DEFAULT 1
                 )
             """)
         
@@ -589,7 +589,7 @@ class DatabaseManager:
             query = """
                 UPDATE licenses 
                 SET hardware_id = :hardware_id, validation_count = validation_count + 1,
-                    last_validated = CURRENT_TIMESTAMP
+                    last_validated = datetime('now')
                 WHERE license_key_hash = :hash
             """
         await self.database.execute(query, values={
@@ -599,12 +599,20 @@ class DatabaseManager:
     
     async def _reactivate_hardware(self, license_hash: str, hardware_id: str):
         """Reactivate license on previously used hardware"""
-        query = """
-            UPDATE licenses 
-            SET hardware_id = :hardware_id, validation_count = validation_count + 1,
-                last_validated = CURRENT_TIMESTAMP
-            WHERE license_key_hash = :hash
-        """
+        if config.is_postgres:
+            query = """
+                UPDATE licenses 
+                SET hardware_id = :hardware_id, validation_count = validation_count + 1,
+                    last_validated = CURRENT_TIMESTAMP
+                WHERE license_key_hash = :hash
+            """
+        else:
+            query = """
+                UPDATE licenses 
+                SET hardware_id = :hardware_id, validation_count = validation_count + 1,
+                    last_validated = datetime('now')
+                WHERE license_key_hash = :hash
+            """
         await self.database.execute(query, values={
             "hardware_id": hardware_id,
             "hash": license_hash
@@ -612,18 +620,32 @@ class DatabaseManager:
     
     async def _change_hardware(self, license_hash: str, new_hardware_id: str, old_hardware_id: str):
         """Handle hardware change with tracking"""
-        query = """
-            UPDATE licenses 
-            SET hardware_id = :new_hardware_id,
-                hardware_changes = hardware_changes + 1,
-                previous_hardware_ids = CASE 
-                    WHEN previous_hardware_ids IS NULL THEN :old_hardware_id
-                    ELSE previous_hardware_ids || ',' || :old_hardware_id
-                END,
-                validation_count = validation_count + 1,
-                last_validated = CURRENT_TIMESTAMP
-            WHERE license_key_hash = :hash
-        """
+        if config.is_postgres:
+            query = """
+                UPDATE licenses 
+                SET hardware_id = :new_hardware_id,
+                    hardware_changes = hardware_changes + 1,
+                    previous_hardware_ids = CASE 
+                        WHEN previous_hardware_ids IS NULL THEN :old_hardware_id
+                        ELSE previous_hardware_ids || ',' || :old_hardware_id
+                    END,
+                    validation_count = validation_count + 1,
+                    last_validated = CURRENT_TIMESTAMP
+                WHERE license_key_hash = :hash
+            """
+        else:
+            query = """
+                UPDATE licenses 
+                SET hardware_id = :new_hardware_id,
+                    hardware_changes = hardware_changes + 1,
+                    previous_hardware_ids = CASE 
+                        WHEN previous_hardware_ids IS NULL THEN :old_hardware_id
+                        ELSE previous_hardware_ids || ',' || :old_hardware_id
+                    END,
+                    validation_count = validation_count + 1,
+                    last_validated = datetime('now')
+                WHERE license_key_hash = :hash
+            """
         await self.database.execute(query, values={
             "new_hardware_id": new_hardware_id,
             "old_hardware_id": old_hardware_id,
@@ -632,12 +654,20 @@ class DatabaseManager:
     
     async def _update_last_validated(self, license_hash: str):
         """Update last validation timestamp"""
-        query = """
-            UPDATE licenses 
-            SET validation_count = validation_count + 1,
-                last_validated = CURRENT_TIMESTAMP
-            WHERE license_key_hash = :hash
-        """
+        if config.is_postgres:
+            query = """
+                UPDATE licenses 
+                SET validation_count = validation_count + 1,
+                    last_validated = CURRENT_TIMESTAMP
+                WHERE license_key_hash = :hash
+            """
+        else:
+            query = """
+                UPDATE licenses 
+                SET validation_count = validation_count + 1,
+                    last_validated = datetime('now')
+                WHERE license_key_hash = :hash
+            """
         await self.database.execute(query, values={"hash": license_hash})
     
     async def _log_validation(self, license_hash: str, hardware_id: str, 
@@ -765,7 +795,8 @@ class DatabaseManager:
                         GROUP BY status
                         ORDER BY count DESC
                     """)
-                except:
+                except Exception as e:
+                    logger.debug("Validation stats query failed", error=str(e))
                     validation_stats = []
                 
                 # Recent validations
@@ -777,7 +808,8 @@ class DatabaseManager:
                         ORDER BY timestamp DESC 
                         LIMIT 50
                     """)
-                except:
+                except Exception as e:
+                    logger.debug("Recent validations query failed", error=str(e))
                     recent_validations = []
                 
                 # Performance metrics
@@ -787,7 +819,8 @@ class DatabaseManager:
                         FROM validation_logs 
                         WHERE timestamp > CURRENT_TIMESTAMP - INTERVAL '1 hour'
                     """) or 0
-                except:
+                except Exception as e:
+                    logger.debug("Performance metrics query failed", error=str(e))
                     avg_response_time = 0
             else:
                 try:
@@ -810,7 +843,8 @@ class DatabaseManager:
                         GROUP BY status
                         ORDER BY count DESC
                     """)
-                except:
+                except Exception as e:
+                    logger.debug("SQLite validation stats query failed", error=str(e))
                     validation_stats = []
                 
                 # Recent validations
@@ -822,7 +856,8 @@ class DatabaseManager:
                         ORDER BY timestamp DESC 
                         LIMIT 50
                     """)
-                except:
+                except Exception as e:
+                    logger.debug("SQLite recent validations query failed", error=str(e))
                     recent_validations = []
                 
                 # Performance metrics
@@ -832,7 +867,8 @@ class DatabaseManager:
                         FROM validation_logs 
                         WHERE timestamp > datetime('now', '-1 hour')
                     """) or 0
-                except:
+                except Exception as e:
+                    logger.debug("SQLite performance metrics query failed", error=str(e))
                     avg_response_time = 0
             
             # Update Prometheus metrics
@@ -1391,256 +1427,1287 @@ async def admin_login_page():
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard_page():
-    """Admin dashboard page"""
-    return """
-<!DOCTYPE html>
+    """Professional admin dashboard page"""
+    return """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF License Server - Admin Dashboard</title>
+    <title>PDF License Server - Admin Panel</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f5f5f5;
-            color: #333;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            color: #2c3e50;
+            line-height: 1.6;
+        }
+
+        .admin-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: linear-gradient(180deg, #2c3e50 0%, #34495e 100%);
             color: white;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .sidebar.collapsed {
+            width: 70px;
+        }
+
+        .sidebar-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid #34495e;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo i {
+            font-size: 2rem;
+            color: #3498db;
+        }
+
+        .logo-text {
+            font-size: 1.2rem;
+            font-weight: 600;
+            transition: opacity 0.3s;
+        }
+
+        .sidebar.collapsed .logo-text,
+        .sidebar.collapsed .nav-text {
+            opacity: 0;
+            width: 0;
+            overflow: hidden;
+        }
+
+        .sidebar-toggle {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 4px;
+            transition: background 0.3s;
+        }
+
+        .sidebar-toggle:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .nav-menu {
+            list-style: none;
+            padding: 1rem 0;
+        }
+
+        .nav-item {
+            margin: 4px 0;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 12px 1.5rem;
+            color: white;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .nav-link:hover,
+        .nav-link.active {
+            background: rgba(52, 152, 219, 0.2);
+            border-right: 3px solid #3498db;
+        }
+
+        .nav-link i {
+            font-size: 1.1rem;
+            width: 20px;
+            margin-right: 12px;
+        }
+
+        .nav-text {
+            transition: opacity 0.3s;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 280px;
+            transition: margin-left 0.3s ease;
+        }
+
+        .main-content.expanded {
+            margin-left: 70px;
+        }
+
+        .top-header {
+            background: white;
             padding: 1rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
-        .header h1 { font-size: 1.5rem; }
-        .logout-btn {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: none;
-            padding: 0.5rem 1rem;
-            border-radius: 5px;
-            cursor: pointer;
+
+        .page-title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #2c3e50;
         }
-        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+
+        .header-actions {
+            display: flex;
+            align-items: center;
             gap: 1rem;
+        }
+
+        .notification-icon {
+            position: relative;
+            background: #ecf0f1;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .notification-icon:hover {
+            background: #d5dbdb;
+        }
+
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: background 0.3s;
+        }
+
+        .user-profile:hover {
+            background: #ecf0f1;
+        }
+
+        .user-avatar {
+            width: 36px;
+            height: 36px;
+            background: #3498db;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .content-area {
+            padding: 2rem;
+        }
+
+        /* Dashboard Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
             margin-bottom: 2rem;
         }
+
         .stat-card {
             background: white;
+            border-radius: 12px;
             padding: 1.5rem;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            text-align: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            position: relative;
+            overflow: hidden;
         }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--card-color, #3498db);
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: white;
+            background: var(--card-color, #3498db);
+        }
+
         .stat-number {
-            font-size: 2rem;
-            font-weight: bold;
-            color: #667eea;
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #2c3e50;
             margin-bottom: 0.5rem;
         }
+
         .stat-label {
-            color: #666;
+            color: #7f8c8d;
             font-size: 0.9rem;
+            font-weight: 500;
         }
-        .section {
+
+        .stat-change {
+            font-size: 0.8rem;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 20px;
+            margin-top: 8px;
+            display: inline-block;
+        }
+
+        .positive {
+            background: #d5f4e6;
+            color: #27ae60;
+        }
+
+        .negative {
+            background: #fadbd8;
+            color: #e74c3c;
+        }
+
+        /* Content Sections */
+        .content-section {
             background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             margin-bottom: 2rem;
             overflow: hidden;
         }
+
         .section-header {
-            background: #f8f9fa;
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid #dee2e6;
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid #ecf0f1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-title {
+            font-size: 1.3rem;
             font-weight: 600;
+            color: #2c3e50;
         }
-        .section-content { padding: 1.5rem; }
-        .loading { text-align: center; padding: 2rem; color: #666; }
-        .error { 
-            background: #fee; 
-            color: #c33; 
-            padding: 1rem; 
-            border-radius: 5px; 
-            margin-bottom: 1rem; 
+
+        .section-content {
+            padding: 1.5rem 2rem;
         }
-        table {
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #219a52;
+        }
+
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #c0392b;
+        }
+
+        .btn-secondary {
+            background: #95a5a6;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #7f8c8d;
+        }
+
+        /* Tables */
+        .table-container {
+            overflow-x: auto;
+        }
+
+        .data-table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 0.9rem;
         }
-        th, td {
-            padding: 0.75rem;
-            text-align: left;
-            border-bottom: 1px solid #dee2e6;
-        }
-        th {
+
+        .data-table th {
             background: #f8f9fa;
+            padding: 1rem;
+            text-align: left;
             font-weight: 600;
+            color: #2c3e50;
+            border-bottom: 2px solid #dee2e6;
         }
-        .status-active { color: #28a745; font-weight: 600; }
-        .status-expired { color: #dc3545; font-weight: 600; }
-        .status-inactive { color: #6c757d; font-weight: 600; }
+
+        .data-table td {
+            padding: 1rem;
+            border-bottom: 1px solid #dee2e6;
+            vertical-align: middle;
+        }
+
+        .data-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-active {
+            background: #d5f4e6;
+            color: #27ae60;
+        }
+
+        .status-expired {
+            background: #fadbd8;
+            color: #e74c3c;
+        }
+
+        .status-inactive {
+            background: #f8f9fa;
+            color: #95a5a6;
+        }
+
+        /* Forms */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .form-select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e8ed;
+            border-radius: 8px;
+            font-size: 1rem;
+            background: white;
+            cursor: pointer;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 2000;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
+            animation: slideIn 0.3s ease;
+        }
+
+        .modal-header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid #ecf0f1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #95a5a6;
+            padding: 4px;
+            border-radius: 4px;
+        }
+
+        .modal-close:hover {
+            background: #f8f9fa;
+        }
+
+        .modal-body {
+            padding: 2rem;
+        }
+
+        /* Charts */
+        .chart-container {
+            height: 300px;
+            margin: 1rem 0;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 3rem;
+            color: #7f8c8d;
+        }
+
+        .loading i {
+            font-size: 3rem;
+            animation: spin 1s linear infinite;
+            color: #3498db;
+            margin-bottom: 1rem;
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-50px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+
+            .sidebar.show {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .top-header {
+                padding: 1rem;
+            }
+
+            .content-area {
+                padding: 1rem;
+            }
+        }
+
+        /* Hide content initially */
+        .content-page {
+            display: none;
+        }
+
+        .content-page.active {
+            display: block;
+        }
+
+        /* Alert */
+        .alert {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border-left: 4px solid;
+        }
+
+        .alert-success {
+            background: #d5f4e6;
+            border-color: #27ae60;
+            color: #1e8449;
+        }
+
+        .alert-danger {
+            background: #fadbd8;
+            border-color: #e74c3c;
+            color: #c0392b;
+        }
+
+        .alert-info {
+            background: #d6eaf8;
+            border-color: #3498db;
+            color: #1f618d;
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🔐 License Server Dashboard</h1>
-        <button class="logout-btn" onclick="logout()">Logout</button>
+    <div class="admin-container">
+        <!-- Sidebar -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fas fa-shield-alt"></i>
+                    <span class="logo-text">License Server</span>
+                </div>
+                <button class="sidebar-toggle" onclick="toggleSidebar()">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </div>
+            
+            <ul class="nav-menu">
+                <li class="nav-item">
+                    <a href="#" class="nav-link active" onclick="showPage('dashboard')">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span class="nav-text">Dashboard</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" onclick="showPage('licenses')">
+                        <i class="fas fa-key"></i>
+                        <span class="nav-text">Licenses</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" onclick="showPage('customers')">
+                        <i class="fas fa-users"></i>
+                        <span class="nav-text">Customers</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" onclick="showPage('analytics')">
+                        <i class="fas fa-chart-line"></i>
+                        <span class="nav-text">Analytics</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" onclick="showPage('logs')">
+                        <i class="fas fa-list-alt"></i>
+                        <span class="nav-text">Activity Logs</span>
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a href="#" class="nav-link" onclick="showPage('settings')">
+                        <i class="fas fa-cog"></i>
+                        <span class="nav-text">Settings</span>
+                    </a>
+                </li>
+                <li class="nav-item" style="margin-top: 2rem; border-top: 1px solid #34495e; padding-top: 1rem;">
+                    <a href="#" class="nav-link" onclick="logout()">
+                        <i class="fas fa-sign-out-alt"></i>
+                        <span class="nav-text">Logout</span>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content" id="mainContent">
+            <!-- Top Header -->
+            <header class="top-header">
+                <div>
+                    <h1 class="page-title" id="pageTitle">Dashboard</h1>
+                </div>
+                <div class="header-actions">
+                    <button class="notification-icon">
+                        <i class="fas fa-bell"></i>
+                    </button>
+                    <div class="user-profile" onclick="showUserMenu()">
+                        <div class="user-avatar">A</div>
+                        <div>
+                            <div style="font-weight: 600;">Admin</div>
+                            <div style="font-size: 0.8rem; color: #7f8c8d;">Administrator</div>
+                        </div>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="content-area">
+                <!-- Dashboard Page -->
+                <div class="content-page active" id="dashboardPage">
+                    <div class="dashboard-grid">
+                        <div class="stat-card" style="--card-color: #3498db">
+                            <div class="stat-header">
+                                <div class="stat-icon">
+                                    <i class="fas fa-key"></i>
+                                </div>
+                            </div>
+                            <div class="stat-number" id="totalLicenses">0</div>
+                            <div class="stat-label">Total Licenses</div>
+                            <div class="stat-change positive">
+                                <i class="fas fa-arrow-up"></i> +12% this month
+                            </div>
+                        </div>
+
+                        <div class="stat-card" style="--card-color: #27ae60">
+                            <div class="stat-header">
+                                <div class="stat-icon">
+                                    <i class="fas fa-check-circle"></i>
+                                </div>
+                            </div>
+                            <div class="stat-number" id="activeLicenses">0</div>
+                            <div class="stat-label">Active Licenses</div>
+                            <div class="stat-change positive">
+                                <i class="fas fa-arrow-up"></i> +8% this month
+                            </div>
+                        </div>
+
+                        <div class="stat-card" style="--card-color: #f39c12">
+                            <div class="stat-header">
+                                <div class="stat-icon">
+                                    <i class="fas fa-clock"></i>
+                                </div>
+                            </div>
+                            <div class="stat-number" id="expiringLicenses">0</div>
+                            <div class="stat-label">Expiring Soon</div>
+                            <div class="stat-change negative">
+                                <i class="fas fa-arrow-down"></i> -5% this month
+                            </div>
+                        </div>
+
+                        <div class="stat-card" style="--card-color: #e74c3c">
+                            <div class="stat-header">
+                                <div class="stat-icon">
+                                    <i class="fas fa-times-circle"></i>
+                                </div>
+                            </div>
+                            <div class="stat-number" id="expiredLicenses">0</div>
+                            <div class="stat-label">Expired Licenses</div>
+                            <div class="stat-change positive">
+                                <i class="fas fa-arrow-down"></i> -15% this month
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 2rem;">
+                        <div class="content-section">
+                            <div class="section-header">
+                                <h2 class="section-title">License Validation Trends</h2>
+                                <select class="form-select" style="width: auto;">
+                                    <option>Last 7 days</option>
+                                    <option>Last 30 days</option>
+                                    <option>Last 90 days</option>
+                                </select>
+                            </div>
+                            <div class="section-content">
+                                <div class="chart-container">
+                                    <canvas id="validationChart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="content-section">
+                            <div class="section-header">
+                                <h2 class="section-title">Quick Actions</h2>
+                            </div>
+                            <div class="section-content">
+                                <div style="display: flex; flex-direction: column; gap: 1rem;">
+                                    <button class="btn btn-primary" onclick="showCreateLicenseModal()">
+                                        <i class="fas fa-plus"></i> Create License
+                                    </button>
+                                    <button class="btn btn-secondary" onclick="showPage('customers')">
+                                        <i class="fas fa-user-plus"></i> Add Customer
+                                    </button>
+                                    <button class="btn btn-success" onclick="exportData()">
+                                        <i class="fas fa-download"></i> Export Data
+                                    </button>
+                                    <button class="btn btn-danger" onclick="showPage('logs')">
+                                        <i class="fas fa-exclamation-triangle"></i> View Alerts
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="content-section">
+                        <div class="section-header">
+                            <h2 class="section-title">Recent Activity</h2>
+                            <a href="#" class="btn btn-secondary" onclick="showPage('logs')">View All</a>
+                        </div>
+                        <div class="section-content">
+                            <div class="table-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Event</th>
+                                            <th>License</th>
+                                            <th>Status</th>
+                                            <th>IP Address</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="recentActivityTable">
+                                        <tr>
+                                            <td colspan="5" class="loading">
+                                                <i class="fas fa-spinner"></i>
+                                                <div>Loading recent activity...</div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Licenses Page -->
+                <div class="content-page" id="licensesPage">
+                    <div class="content-section">
+                        <div class="section-header">
+                            <h2 class="section-title">License Management</h2>
+                            <button class="btn btn-primary" onclick="showCreateLicenseModal()">
+                                <i class="fas fa-plus"></i> Create New License
+                            </button>
+                        </div>
+                        <div class="section-content">
+                            <div style="margin-bottom: 1.5rem; display: flex; gap: 1rem; align-items: center;">
+                                <input type="text" class="form-input" placeholder="Search licenses..." style="max-width: 300px;" id="licenseSearch">
+                                <select class="form-select" style="max-width: 200px;">
+                                    <option value="">All Statuses</option>
+                                    <option value="active">Active</option>
+                                    <option value="expired">Expired</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                                <button class="btn btn-secondary">
+                                    <i class="fas fa-filter"></i> Filter
+                                </button>
+                            </div>
+                            <div class="table-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>License Key</th>
+                                            <th>Customer</th>
+                                            <th>Created</th>
+                                            <th>Expires</th>
+                                            <th>Status</th>
+                                            <th>Usage</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="licensesTable">
+                                        <tr>
+                                            <td colspan="7" class="loading">
+                                                <i class="fas fa-spinner"></i>
+                                                <div>Loading licenses...</div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Other pages placeholders -->
+                <div class="content-page" id="customersPage">
+                    <div class="content-section">
+                        <div class="section-header">
+                            <h2 class="section-title">Customer Management</h2>
+                        </div>
+                        <div class="section-content">
+                            <p style="color: #7f8c8d; text-align: center; padding: 3rem;">Customer management features coming soon...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="content-page" id="analyticsPage">
+                    <div class="content-section">
+                        <div class="section-header">
+                            <h2 class="section-title">Analytics & Reports</h2>
+                        </div>
+                        <div class="section-content">
+                            <p style="color: #7f8c8d; text-align: center; padding: 3rem;">Advanced analytics coming soon...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="content-page" id="logsPage">
+                    <div class="content-section">
+                        <div class="section-header">
+                            <h2 class="section-title">Activity Logs</h2>
+                        </div>
+                        <div class="section-content">
+                            <p style="color: #7f8c8d; text-align: center; padding: 3rem;">Activity logs coming soon...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="content-page" id="settingsPage">
+                    <div class="content-section">
+                        <div class="section-header">
+                            <h2 class="section-title">System Settings</h2>
+                        </div>
+                        <div class="section-content">
+                            <p style="color: #7f8c8d; text-align: center; padding: 3rem;">Settings panel coming soon...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
-    
-    <div class="container">
-        <div class="stats-grid" id="statsGrid">
-            <div class="loading">Loading dashboard data...</div>
-        </div>
-        
-        <div class="section">
-            <div class="section-header">Recent License Validations</div>
-            <div class="section-content" id="recentValidations">
-                <div class="loading">Loading validations...</div>
+
+    <!-- Create License Modal -->
+    <div class="modal" id="createLicenseModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Create New License</h3>
+                <button class="modal-close" onclick="hideCreateLicenseModal()">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="createLicenseForm">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">Customer Email *</label>
+                            <input type="email" class="form-input" name="customer_email" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Customer Name</label>
+                            <input type="text" class="form-input" name="customer_name">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Duration (Days) *</label>
+                            <input type="number" class="form-input" name="duration_days" value="30" min="1" max="365" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Hardware ID (Optional)</label>
+                            <input type="text" class="form-input" name="hardware_id">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Notes</label>
+                        <textarea class="form-input" name="notes" rows="3" placeholder="Additional notes or comments..."></textarea>
+                    </div>
+                    <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 2rem;">
+                        <button type="button" class="btn btn-secondary" onclick="hideCreateLicenseModal()">Cancel</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plus"></i> Create License
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
-    
+
     <script>
+        // Get auth token
         const token = localStorage.getItem('admin_token');
         if (!token) {
             window.location.href = '/';
         }
-        
-        async function fetchWithAuth(url) {
-            const response = await fetch(url, {
+
+        // API helper function
+        async function apiCall(endpoint, options = {}) {
+            const response = await fetch(endpoint, {
+                ...options,
                 headers: {
-                    'Authorization': `Bearer ${token}`
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                    ...options.headers
                 }
             });
-            
+
             if (response.status === 401) {
                 localStorage.removeItem('admin_token');
                 window.location.href = '/';
                 return null;
             }
-            
+
             return response;
         }
-        
-        async function loadDashboard() {
-            try {
-                // Try the main dashboard endpoint first
-                let response = await fetchWithAuth('/api/admin/dashboard');
-                if (!response) return;
-                
-                let data;
-                if (response.ok) {
-                    data = await response.json();
-                } else {
-                    // Fallback to simple stats if main dashboard fails
-                    console.log('Main dashboard failed, trying simple stats...');
-                    response = await fetchWithAuth('/api/admin/simple-stats');
-                    if (!response || !response.ok) {
-                        throw new Error('Both dashboard endpoints failed');
-                    }
-                    data = await response.json();
-                    // Add default values for missing fields
-                    data.valid_licenses = data.valid_licenses || 0;
-                    data.expired_licenses = data.expired_licenses || 0;
-                    data.avg_response_time_ms = data.avg_response_time_ms || 0;
-                    data.cache_hit_rate = data.cache_hit_rate || 0;
-                    data.validation_stats = data.validation_stats || [];
-                    data.recent_validations = data.recent_validations || [];
-                }
-                
-                // Update stats
-                document.getElementById('statsGrid').innerHTML = `
-                    <div class="stat-card">
-                        <div class="stat-number">${data.total_licenses || 0}</div>
-                        <div class="stat-label">Total Licenses</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">${data.active_licenses || 0}</div>
-                        <div class="stat-label">Active Licenses</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">${data.valid_licenses || 0}</div>
-                        <div class="stat-label">Valid & Current</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">${data.expired_licenses || 0}</div>
-                        <div class="stat-label">Expired</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">${data.avg_response_time_ms || 0}ms</div>
-                        <div class="stat-label">Avg Response Time</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">${data.cache_hit_rate || 0}%</div>
-                        <div class="stat-label">Cache Hit Rate</div>
-                    </div>
-                `;
-                
-                // Update recent validations
-                let validationsHtml = '<table><thead><tr><th>License</th><th>Hardware ID</th><th>Status</th><th>Time</th><th>Response</th></tr></thead><tbody>';
-                
-                if (data.recent_validations && data.recent_validations.length > 0) {
-                    data.recent_validations.slice(0, 20).forEach(validation => {
-                        const statusClass = validation.status.includes('VALID') ? 'status-active' : 
-                                           validation.status.includes('EXPIRED') ? 'status-expired' : 'status-inactive';
-                        
-                        validationsHtml += `
-                            <tr>
-                                <td>${(validation.license_key_hash || 'N/A').substring(0, 12)}...</td>
-                                <td>${validation.hardware_id || 'N/A'}</td>
-                                <td><span class="${statusClass}">${validation.status || 'UNKNOWN'}</span></td>
-                                <td>${validation.timestamp ? new Date(validation.timestamp).toLocaleString() : 'N/A'}</td>
-                                <td>${validation.response_time_ms || 'N/A'}ms</td>
-                            </tr>
-                        `;
-                    });
-                } else {
-                    validationsHtml += '<tr><td colspan="5" style="text-align: center; color: #666;">No validation data available</td></tr>';
-                }
-                
-                validationsHtml += '</tbody></table>';
-                document.getElementById('recentValidations').innerHTML = validationsHtml;
-                
-                // Show error message if present
-                if (data.error) {
-                    document.getElementById('statsGrid').innerHTML += `
-                        <div class="stat-card" style="background: #fee; color: #c33;">
-                            <div class="stat-label">⚠️ ${data.error}</div>
-                        </div>
-                    `;
-                }
-                
-            } catch (error) {
-                console.error('Dashboard load error:', error);
-                document.getElementById('statsGrid').innerHTML = `
-                    <div class="error">Failed to load dashboard data. Please refresh the page.</div>
-                `;
-                document.getElementById('recentValidations').innerHTML = `
-                    <div class="error">Failed to load validations. Check server logs for details.</div>
-                `;
+
+        // Sidebar functionality
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const mainContent = document.getElementById('mainContent');
+            
+            sidebar.classList.toggle('collapsed');
+            mainContent.classList.toggle('expanded');
+        }
+
+        // Page navigation
+        function showPage(pageId) {
+            // Hide all pages
+            document.querySelectorAll('.content-page').forEach(page => {
+                page.classList.remove('active');
+            });
+
+            // Remove active class from all nav links
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+
+            // Show selected page
+            document.getElementById(pageId + 'Page').classList.add('active');
+            
+            // Update page title
+            const titles = {
+                'dashboard': 'Dashboard',
+                'licenses': 'License Management',
+                'customers': 'Customer Management',
+                'analytics': 'Analytics & Reports',
+                'logs': 'Activity Logs',
+                'settings': 'System Settings'
+            };
+            document.getElementById('pageTitle').textContent = titles[pageId];
+
+            // Set active nav link
+            event.target.classList.add('active');
+
+            // Load page data
+            if (pageId === 'dashboard') {
+                loadDashboardData();
+            } else if (pageId === 'licenses') {
+                loadLicensesData();
             }
         }
-        
+
+        // Load dashboard data
+        async function loadDashboardData() {
+            try {
+                const response = await apiCall('/api/admin/dashboard');
+                if (!response || !response.ok) {
+                    // Fallback to simple stats
+                    const simpleResponse = await apiCall('/api/admin/simple-stats');
+                    if (simpleResponse && simpleResponse.ok) {
+                        const data = await simpleResponse.json();
+                        updateDashboardStats(data);
+                    }
+                    return;
+                }
+
+                const data = await response.json();
+                updateDashboardStats(data);
+                updateValidationChart(data);
+                updateRecentActivity(data);
+            } catch (error) {
+                console.error('Failed to load dashboard data:', error);
+                showAlert('Failed to load dashboard data', 'danger');
+            }
+        }
+
+        function updateDashboardStats(data) {
+            document.getElementById('totalLicenses').textContent = data.total_licenses || 0;
+            document.getElementById('activeLicenses').textContent = data.active_licenses || 0;
+            document.getElementById('expiringLicenses').textContent = data.valid_licenses || 0;
+            document.getElementById('expiredLicenses').textContent = data.expired_licenses || 0;
+        }
+
+        function updateValidationChart(data) {
+            const ctx = document.getElementById('validationChart').getContext('2d');
+            
+            // Sample data - replace with real data
+            const chartData = {
+                labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                datasets: [{
+                    label: 'Successful Validations',
+                    data: [120, 190, 300, 500, 200, 300, 450],
+                    borderColor: '#3498db',
+                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
+                    tension: 0.4
+                }, {
+                    label: 'Failed Validations',
+                    data: [20, 25, 30, 45, 28, 35, 40],
+                    borderColor: '#e74c3c',
+                    backgroundColor: 'rgba(231, 76, 60, 0.1)',
+                    tension: 0.4
+                }]
+            };
+
+            new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateRecentActivity(data) {
+            const tbody = document.getElementById('recentActivityTable');
+            
+            if (data.recent_validations && data.recent_validations.length > 0) {
+                tbody.innerHTML = data.recent_validations.slice(0, 5).map(validation => `
+                    <tr>
+                        <td>${new Date(validation.timestamp).toLocaleString()}</td>
+                        <td>License Validation</td>
+                        <td>${(validation.license_key_hash || 'N/A').substring(0, 12)}...</td>
+                        <td><span class="status-badge status-${validation.status.includes('VALID') ? 'active' : 'expired'}">${validation.status}</span></td>
+                        <td>${validation.ip_address || 'N/A'}</td>
+                    </tr>
+                `).join('');
+            } else {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #7f8c8d;">No recent activity</td></tr>';
+            }
+        }
+
+        // Load licenses data
+        async function loadLicensesData() {
+            try {
+                const response = await apiCall('/api/admin/licenses');
+                if (!response || !response.ok) {
+                    throw new Error('Failed to load licenses');
+                }
+
+                const data = await response.json();
+                updateLicensesTable(data.licenses || []);
+            } catch (error) {
+                console.error('Failed to load licenses:', error);
+                showAlert('Failed to load licenses data', 'danger');
+            }
+        }
+
+        function updateLicensesTable(licenses) {
+            const tbody = document.getElementById('licensesTable');
+            
+            if (licenses.length > 0) {
+                tbody.innerHTML = licenses.map(license => {
+                    const isActive = license.active && new Date(license.expiry_date) > new Date();
+                    const statusClass = isActive ? 'active' : (new Date(license.expiry_date) <= new Date() ? 'expired' : 'inactive');
+                    
+                    return `
+                        <tr>
+                            <td><code style="background: #f8f9fa; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">${(license.license_key || 'N/A').substring(0, 20)}...</code></td>
+                            <td>
+                                <div style="font-weight: 600;">${license.customer_name || license.customer_email}</div>
+                                <div style="font-size: 0.8rem; color: #7f8c8d;">${license.customer_email}</div>
+                            </td>
+                            <td>${license.created_date ? new Date(license.created_date).toLocaleDateString() : 'N/A'}</td>
+                            <td>${license.expiry_date ? new Date(license.expiry_date).toLocaleDateString() : 'N/A'}</td>
+                            <td><span class="status-badge status-${statusClass}">${statusClass}</span></td>
+                            <td>${license.validation_count || 0} validations</td>
+                            <td>
+                                <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.8rem;">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.8rem; margin-left: 4px;">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #7f8c8d;">No licenses found</td></tr>';
+            }
+        }
+
+        // Modal functions
+        function showCreateLicenseModal() {
+            document.getElementById('createLicenseModal').classList.add('show');
+        }
+
+        function hideCreateLicenseModal() {
+            document.getElementById('createLicenseModal').classList.remove('show');
+        }
+
+        // Create license form
+        document.getElementById('createLicenseForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const licenseData = {
+                customer_email: formData.get('customer_email'),
+                customer_name: formData.get('customer_name'),
+                duration_days: parseInt(formData.get('duration_days')),
+                hardware_id: formData.get('hardware_id'),
+                notes: formData.get('notes')
+            };
+
+            try {
+                const response = await apiCall('/api/admin/licenses', {
+                    method: 'POST',
+                    body: JSON.stringify(licenseData)
+                });
+
+                if (response && response.ok) {
+                    const result = await response.json();
+                    showAlert('License created successfully!', 'success');
+                    hideCreateLicenseModal();
+                    
+                    // Refresh licenses page if currently viewing
+                    if (document.getElementById('licensesPage').classList.contains('active')) {
+                        loadLicensesData();
+                    }
+                    
+                    // Reset form
+                    e.target.reset();
+                } else {
+                    throw new Error('Failed to create license');
+                }
+            } catch (error) {
+                console.error('Error creating license:', error);
+                showAlert('Failed to create license', 'danger');
+            }
+        });
+
+        // Utility functions
+        function showAlert(message, type = 'info') {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.textContent = message;
+            
+            const contentArea = document.querySelector('.content-area');
+            contentArea.insertBefore(alertDiv, contentArea.firstChild);
+            
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 5000);
+        }
+
         function logout() {
             localStorage.removeItem('admin_token');
             window.location.href = '/';
         }
-        
-        // Load dashboard on page load
-        loadDashboard();
-        
-        // Auto-refresh every 30 seconds
-        setInterval(loadDashboard, 30000);
+
+        function exportData() {
+            showAlert('Export functionality coming soon!', 'info');
+        }
+
+        function showUserMenu() {
+            showAlert('User menu coming soon!', 'info');
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDashboardData();
+        });
+
+        // Close modal when clicking outside
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('modal')) {
+                e.target.classList.remove('show');
+            }
+        });
     </script>
 </body>
-</html>
-    """
+</html>"""
 
 # =============================================================================
 # APPLICATION STARTUP
