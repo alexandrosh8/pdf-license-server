@@ -1,4 +1,4 @@
-# app_enhanced.py - Enhanced License Server with Encrypted License Keys
+# app_enhanced.py - Enhanced License Server with PostgreSQL Support and All Fixes
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
 import hashlib
 import json
@@ -18,14 +18,25 @@ app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
-# Database setup
-DATABASE = 'licenses.db'
+# Database setup - Support both SQLite (local) and PostgreSQL (production)
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+USE_POSTGRES = DATABASE_URL is not None
+DATABASE = 'licenses.db'  # Fallback for local development
 
 # Encryption key for license keys - generate once and save
 ENCRYPTION_KEY_FILE = '.encryption_key'
 
 def get_or_create_encryption_key():
     """Get or create the encryption key for license keys."""
+    # For production, use environment variable
+    env_key = os.environ.get('ENCRYPTION_KEY')
+    if env_key:
+        return env_key.encode()
+    
+    # For local development, use file
     if os.path.exists(ENCRYPTION_KEY_FILE):
         with open(ENCRYPTION_KEY_FILE, 'rb') as f:
             return f.read()
@@ -70,68 +81,135 @@ def get_real_ip():
 
 def init_db():
     """Initialize the license database with enhanced schema."""
-    conn = sqlite3.connect(DATABASE)
-    
-    # Create licenses table with encrypted license key
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS licenses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            license_key_encrypted TEXT UNIQUE NOT NULL,
-            license_key_hash TEXT UNIQUE NOT NULL,
-            hardware_id TEXT,
-            customer_email TEXT,
-            customer_name TEXT,
-            created_date TEXT NOT NULL,
-            expiry_date TEXT NOT NULL,
-            payment_id TEXT,
-            active INTEGER DEFAULT 1,
-            last_used TEXT,
-            notes TEXT,
-            activation_count INTEGER DEFAULT 0,
-            last_activation_date TEXT,
-            previously_bound_hardware TEXT
-        )
-    ''')
-    
-    # Create validation logs table
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS validation_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            license_key_hash TEXT,
-            hardware_id TEXT,
-            timestamp TEXT,
-            status TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            details TEXT
-        )
-    ''')
-    
-    # Create remembered licenses table (for tracking reactivations)
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS license_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            license_key_hash TEXT,
-            hardware_id TEXT,
-            action TEXT,
-            timestamp TEXT,
-            ip_address TEXT,
-            details TEXT
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    if USE_POSTGRES:
+        import psycopg2
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Create licenses table with encrypted license key
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS licenses (
+                id SERIAL PRIMARY KEY,
+                license_key_encrypted TEXT UNIQUE NOT NULL,
+                license_key_hash TEXT UNIQUE NOT NULL,
+                hardware_id TEXT,
+                customer_email TEXT,
+                customer_name TEXT,
+                created_date TEXT NOT NULL,
+                expiry_date TEXT NOT NULL,
+                payment_id TEXT,
+                active INTEGER DEFAULT 1,
+                last_used TEXT,
+                notes TEXT,
+                activation_count INTEGER DEFAULT 0,
+                last_activation_date TEXT,
+                previously_bound_hardware TEXT
+            )
+        ''')
+        
+        # Create validation logs table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS validation_logs (
+                id SERIAL PRIMARY KEY,
+                license_key_hash TEXT,
+                hardware_id TEXT,
+                timestamp TEXT,
+                status TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                details TEXT
+            )
+        ''')
+        
+        # Create remembered licenses table (for tracking reactivations)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS license_history (
+                id SERIAL PRIMARY KEY,
+                license_key_hash TEXT,
+                hardware_id TEXT,
+                action TEXT,
+                timestamp TEXT,
+                ip_address TEXT,
+                details TEXT
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+    else:
+        # SQLite for local development
+        conn = sqlite3.connect(DATABASE)
+        
+        # Create licenses table with encrypted license key
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS licenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                license_key_encrypted TEXT UNIQUE NOT NULL,
+                license_key_hash TEXT UNIQUE NOT NULL,
+                hardware_id TEXT,
+                customer_email TEXT,
+                customer_name TEXT,
+                created_date TEXT NOT NULL,
+                expiry_date TEXT NOT NULL,
+                payment_id TEXT,
+                active INTEGER DEFAULT 1,
+                last_used TEXT,
+                notes TEXT,
+                activation_count INTEGER DEFAULT 0,
+                last_activation_date TEXT,
+                previously_bound_hardware TEXT
+            )
+        ''')
+        
+        # Create validation logs table
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS validation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                license_key_hash TEXT,
+                hardware_id TEXT,
+                timestamp TEXT,
+                status TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                details TEXT
+            )
+        ''')
+        
+        # Create remembered licenses table (for tracking reactivations)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS license_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                license_key_hash TEXT,
+                hardware_id TEXT,
+                action TEXT,
+                timestamp TEXT,
+                ip_address TEXT,
+                details TEXT
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
 
 @contextmanager
 def get_db():
-    """Database context manager."""
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+    """Database context manager that works with both SQLite and PostgreSQL."""
+    if USE_POSTGRES:
+        import psycopg2
+        import psycopg2.extras
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.cursor_factory = psycopg2.extras.RealDictCursor
+        try:
+            yield conn
+        finally:
+            conn.close()
+    else:
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 def hash_license_key(license_key):
     """Create a hash of the license key for lookups."""
@@ -141,19 +219,35 @@ def log_validation_attempt(license_key, hardware_id, status, details=None):
     """Log a validation attempt with enhanced information."""
     try:
         with get_db() as conn:
-            conn.execute('''
-                INSERT INTO validation_logs (license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                hash_license_key(license_key) if license_key else None, 
-                hardware_id, 
-                datetime.now().isoformat(), 
-                status, 
-                get_real_ip(),
-                request.headers.get('User-Agent', 'Unknown'),
-                details
-            ))
-            conn.commit()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO validation_logs (license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ''', (
+                    hash_license_key(license_key) if license_key else None, 
+                    hardware_id, 
+                    datetime.now().isoformat(), 
+                    status, 
+                    get_real_ip(),
+                    request.headers.get('User-Agent', 'Unknown'),
+                    details
+                ))
+                conn.commit()
+            else:
+                conn.execute('''
+                    INSERT INTO validation_logs (license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    hash_license_key(license_key) if license_key else None, 
+                    hardware_id, 
+                    datetime.now().isoformat(), 
+                    status, 
+                    get_real_ip(),
+                    request.headers.get('User-Agent', 'Unknown'),
+                    details
+                ))
+                conn.commit()
     except Exception as e:
         print(f"Failed to log validation attempt: {e}")
 
@@ -161,18 +255,33 @@ def log_license_history(license_key, hardware_id, action, details=None):
     """Log license history for tracking reactivations."""
     try:
         with get_db() as conn:
-            conn.execute('''
-                INSERT INTO license_history (license_key_hash, hardware_id, action, timestamp, ip_address, details)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                hash_license_key(license_key) if license_key else None,
-                hardware_id,
-                action,
-                datetime.now().isoformat(),
-                get_real_ip(),
-                details
-            ))
-            conn.commit()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO license_history (license_key_hash, hardware_id, action, timestamp, ip_address, details)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                ''', (
+                    hash_license_key(license_key) if license_key else None,
+                    hardware_id,
+                    action,
+                    datetime.now().isoformat(),
+                    get_real_ip(),
+                    details
+                ))
+                conn.commit()
+            else:
+                conn.execute('''
+                    INSERT INTO license_history (license_key_hash, hardware_id, action, timestamp, ip_address, details)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    hash_license_key(license_key) if license_key else None,
+                    hardware_id,
+                    action,
+                    datetime.now().isoformat(),
+                    get_real_ip(),
+                    details
+                ))
+                conn.commit()
     except Exception as e:
         print(f"Failed to log license history: {e}")
 
@@ -194,13 +303,23 @@ def create_monthly_license(customer_email, customer_name=None, hardware_id=None,
     key_hash = hash_license_key(license_key)
     
     with get_db() as conn:
-        conn.execute('''
-            INSERT INTO licenses (license_key_encrypted, license_key_hash, hardware_id, customer_email, 
-                                customer_name, created_date, expiry_date, payment_id, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (encrypted_key, key_hash, hardware_id, customer_email, customer_name, 
-              created_date.isoformat(), expiry_date.isoformat(), payment_id, notes))
-        conn.commit()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO licenses (license_key_encrypted, license_key_hash, hardware_id, customer_email, 
+                                    customer_name, created_date, expiry_date, payment_id, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ''', (encrypted_key, key_hash, hardware_id, customer_email, customer_name, 
+                  created_date.isoformat(), expiry_date.isoformat(), payment_id, notes))
+            conn.commit()
+        else:
+            conn.execute('''
+                INSERT INTO licenses (license_key_encrypted, license_key_hash, hardware_id, customer_email, 
+                                    customer_name, created_date, expiry_date, payment_id, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (encrypted_key, key_hash, hardware_id, customer_email, customer_name, 
+                  created_date.isoformat(), expiry_date.isoformat(), payment_id, notes))
+            conn.commit()
     
     log_license_history(license_key, hardware_id, 'CREATED', f'New license for {customer_email}')
     
@@ -240,10 +359,15 @@ def validate_license():
         
         with get_db() as conn:
             # Find license by hash
-            license_row = conn.execute(
-                'SELECT * FROM licenses WHERE license_key_hash = ?',
-                (key_hash,)
-            ).fetchone()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM licenses WHERE license_key_hash = %s', (key_hash,))
+                license_row = cursor.fetchone()
+            else:
+                license_row = conn.execute(
+                    'SELECT * FROM licenses WHERE license_key_hash = ?',
+                    (key_hash,)
+                ).fetchone()
             
             if not license_row:
                 log_validation_attempt(license_key, hardware_id, 'INVALID_KEY', 'License key not found')
@@ -272,13 +396,23 @@ def validate_license():
             
             # If no hardware ID set, bind to this one
             if not stored_hw_id:
-                conn.execute('''
-                    UPDATE licenses 
-                    SET hardware_id = ?, last_used = ?, activation_count = activation_count + 1,
-                        last_activation_date = ?
-                    WHERE license_key_hash = ?
-                ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
-                conn.commit()
+                if USE_POSTGRES:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        UPDATE licenses 
+                        SET hardware_id = %s, last_used = %s, activation_count = COALESCE(activation_count, 0) + 1,
+                            last_activation_date = %s
+                        WHERE license_key_hash = %s
+                    ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
+                    conn.commit()
+                else:
+                    conn.execute('''
+                        UPDATE licenses 
+                        SET hardware_id = ?, last_used = ?, activation_count = COALESCE(activation_count, 0) + 1,
+                            last_activation_date = ?
+                        WHERE license_key_hash = ?
+                    ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
+                    conn.commit()
                 
                 log_validation_attempt(license_key, hardware_id, 'VALID_FIRST_USE', 'License bound to hardware')
                 log_license_history(license_key, hardware_id, 'BOUND', 'First hardware binding')
@@ -287,23 +421,41 @@ def validate_license():
             elif stored_hw_id == hardware_id or (previously_bound and hardware_id in previously_bound):
                 # Update current hardware if it was previously bound
                 if stored_hw_id != hardware_id and previously_bound and hardware_id in previously_bound:
-                    conn.execute('''
-                        UPDATE licenses 
-                        SET hardware_id = ?, last_used = ?, activation_count = activation_count + 1,
-                            last_activation_date = ?
-                        WHERE license_key_hash = ?
-                    ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
-                    conn.commit()
+                    if USE_POSTGRES:
+                        cursor = conn.cursor()
+                        cursor.execute('''
+                            UPDATE licenses 
+                            SET hardware_id = %s, last_used = %s, activation_count = COALESCE(activation_count, 0) + 1,
+                                last_activation_date = %s
+                            WHERE license_key_hash = %s
+                        ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
+                        conn.commit()
+                    else:
+                        conn.execute('''
+                            UPDATE licenses 
+                            SET hardware_id = ?, last_used = ?, activation_count = COALESCE(activation_count, 0) + 1,
+                                last_activation_date = ?
+                            WHERE license_key_hash = ?
+                        ''', (hardware_id, datetime.now().isoformat(), datetime.now().isoformat(), key_hash))
+                        conn.commit()
                     
                     log_validation_attempt(license_key, hardware_id, 'VALID_REACTIVATION', 'Previously bound hardware')
                     log_license_history(license_key, hardware_id, 'REACTIVATED', 'Hardware rebound')
                 else:
                     # Just update last used
-                    conn.execute(
-                        'UPDATE licenses SET last_used = ? WHERE license_key_hash = ?',
-                        (datetime.now().isoformat(), key_hash)
-                    )
-                    conn.commit()
+                    if USE_POSTGRES:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            'UPDATE licenses SET last_used = %s WHERE license_key_hash = %s',
+                            (datetime.now().isoformat(), key_hash)
+                        )
+                        conn.commit()
+                    else:
+                        conn.execute(
+                            'UPDATE licenses SET last_used = ? WHERE license_key_hash = ?',
+                            (datetime.now().isoformat(), key_hash)
+                        )
+                        conn.commit()
                     log_validation_attempt(license_key, hardware_id, 'VALID', 'License validation successful')
                     
             else:
@@ -348,12 +500,21 @@ def check_license(license_key):
     key_hash = hash_license_key(license_key)
     
     with get_db() as conn:
-        license_row = conn.execute(
-            '''SELECT license_key_hash, customer_email, created_date, expiry_date, active, 
-                      hardware_id, activation_count, last_activation_date
-               FROM licenses WHERE license_key_hash = ?''',
-            (key_hash,)
-        ).fetchone()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT license_key_hash, customer_email, created_date, expiry_date, active, 
+                       hardware_id, activation_count, last_activation_date
+                FROM licenses WHERE license_key_hash = %s
+            ''', (key_hash,))
+            license_row = cursor.fetchone()
+        else:
+            license_row = conn.execute(
+                '''SELECT license_key_hash, customer_email, created_date, expiry_date, active, 
+                          hardware_id, activation_count, last_activation_date
+                   FROM licenses WHERE license_key_hash = ?''',
+                (key_hash,)
+            ).fetchone()
         
         if not license_row:
             return render_template_string(CHECK_RESULT_HTML, 
@@ -387,7 +548,8 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "1.1.0"
+        "version": "1.2.0",
+        "database": "PostgreSQL" if USE_POSTGRES else "SQLite"
     })
 
 # =============================================================================
@@ -432,13 +594,24 @@ def admin():
     try:
         with get_db() as conn:
             # Get licenses with decrypted keys
-            licenses_raw = conn.execute('''
-                SELECT license_key_encrypted, license_key_hash, hardware_id, customer_email, 
-                       customer_name, created_date, expiry_date, active, last_used, notes,
-                       activation_count, last_activation_date, previously_bound_hardware
-                FROM licenses 
-                ORDER BY created_date DESC
-            ''').fetchall()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT license_key_encrypted, license_key_hash, hardware_id, customer_email, 
+                           customer_name, created_date, expiry_date, active, last_used, notes,
+                           activation_count, last_activation_date, previously_bound_hardware
+                    FROM licenses 
+                    ORDER BY created_date DESC
+                ''')
+                licenses_raw = cursor.fetchall()
+            else:
+                licenses_raw = conn.execute('''
+                    SELECT license_key_encrypted, license_key_hash, hardware_id, customer_email, 
+                           customer_name, created_date, expiry_date, active, last_used, notes,
+                           activation_count, last_activation_date, previously_bound_hardware
+                    FROM licenses 
+                    ORDER BY created_date DESC
+                ''').fetchall()
             
             # Process licenses
             licenses = []
@@ -465,23 +638,46 @@ def admin():
                 licenses.append(license_dict)
             
             # Get statistics
-            stats = conn.execute('''
-                SELECT 
-                    COUNT(*) as total_licenses,
-                    COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
-                    COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses,
-                    COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses,
-                    SUM(activation_count) as total_activations
-                FROM licenses
-            ''').fetchone()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT 
+                        COUNT(*) as total_licenses,
+                        COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
+                        COUNT(CASE WHEN expiry_date > NOW()::text AND active = 1 THEN 1 END) as valid_licenses,
+                        COUNT(CASE WHEN expiry_date <= NOW()::text THEN 1 END) as expired_licenses,
+                        COALESCE(SUM(activation_count), 0) as total_activations
+                    FROM licenses
+                ''')
+                stats = cursor.fetchone()
+            else:
+                stats = conn.execute('''
+                    SELECT 
+                        COUNT(*) as total_licenses,
+                        COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
+                        COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses,
+                        COUNT(CASE WHEN datetime(expiry_date) <= datetime('now') THEN 1 END) as expired_licenses,
+                        COALESCE(SUM(activation_count), 0) as total_activations
+                    FROM licenses
+                ''').fetchone()
             
             # Recent validations
-            recent_validations = conn.execute('''
-                SELECT license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details
-                FROM validation_logs 
-                ORDER BY timestamp DESC 
-                LIMIT 50
-            ''').fetchall()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details
+                    FROM validation_logs 
+                    ORDER BY timestamp DESC 
+                    LIMIT 50
+                ''')
+                recent_validations = cursor.fetchall()
+            else:
+                recent_validations = conn.execute('''
+                    SELECT license_key_hash, hardware_id, timestamp, status, ip_address, user_agent, details
+                    FROM validation_logs 
+                    ORDER BY timestamp DESC 
+                    LIMIT 50
+                ''').fetchall()
             
             # Process validations to show partial license keys
             validations = []
@@ -492,15 +688,28 @@ def admin():
                 validations.append(val_dict)
             
             # Security stats
-            security_stats = conn.execute('''
-                SELECT 
-                    status,
-                    COUNT(*) as count
-                FROM validation_logs 
-                WHERE timestamp > datetime('now', '-7 days')
-                GROUP BY status
-                ORDER BY count DESC
-            ''').fetchall()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT 
+                        status,
+                        COUNT(*) as count
+                    FROM validation_logs 
+                    WHERE timestamp > (NOW() - INTERVAL '7 days')::text
+                    GROUP BY status
+                    ORDER BY count DESC
+                ''')
+                security_stats = cursor.fetchall()
+            else:
+                security_stats = conn.execute('''
+                    SELECT 
+                        status,
+                        COUNT(*) as count
+                    FROM validation_logs 
+                    WHERE timestamp > datetime('now', '-7 days')
+                    GROUP BY status
+                    ORDER BY count DESC
+                ''').fetchall()
         
         return render_template_string(ADMIN_HTML, 
                                     licenses=licenses, 
@@ -553,10 +762,18 @@ def transfer_license(license_key):
     
     with get_db() as conn:
         # Get current hardware ID
-        current = conn.execute(
-            'SELECT hardware_id, previously_bound_hardware FROM licenses WHERE license_key_hash = ?',
-            (key_hash,)
-        ).fetchone()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT hardware_id, previously_bound_hardware FROM licenses WHERE license_key_hash = %s',
+                (key_hash,)
+            )
+            current = cursor.fetchone()
+        else:
+            current = conn.execute(
+                'SELECT hardware_id, previously_bound_hardware FROM licenses WHERE license_key_hash = ?',
+                (key_hash,)
+            ).fetchone()
         
         if not current:
             return jsonify({'error': 'License not found'}), 404
@@ -572,13 +789,23 @@ def transfer_license(license_key):
                 prev_bound = old_hw_id
         
         # Update to new hardware
-        conn.execute('''
-            UPDATE licenses 
-            SET hardware_id = ?, previously_bound_hardware = ?, 
-                last_activation_date = ?
-            WHERE license_key_hash = ?
-        ''', (new_hardware_id, prev_bound, datetime.now().isoformat(), key_hash))
-        conn.commit()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE licenses 
+                SET hardware_id = %s, previously_bound_hardware = %s, 
+                    last_activation_date = %s
+                WHERE license_key_hash = %s
+            ''', (new_hardware_id, prev_bound, datetime.now().isoformat(), key_hash))
+            conn.commit()
+        else:
+            conn.execute('''
+                UPDATE licenses 
+                SET hardware_id = ?, previously_bound_hardware = ?, 
+                    last_activation_date = ?
+                WHERE license_key_hash = ?
+            ''', (new_hardware_id, prev_bound, datetime.now().isoformat(), key_hash))
+            conn.commit()
         
         log_license_history(license_key, new_hardware_id, 'TRANSFERRED', 
                           f'From {old_hw_id} to {new_hardware_id}')
@@ -594,10 +821,18 @@ def extend_license(license_key):
     key_hash = hash_license_key(license_key)
     
     with get_db() as conn:
-        current_expiry = conn.execute(
-            'SELECT expiry_date FROM licenses WHERE license_key_hash = ?',
-            (key_hash,)
-        ).fetchone()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT expiry_date FROM licenses WHERE license_key_hash = %s',
+                (key_hash,)
+            )
+            current_expiry = cursor.fetchone()
+        else:
+            current_expiry = conn.execute(
+                'SELECT expiry_date FROM licenses WHERE license_key_hash = ?',
+                (key_hash,)
+            ).fetchone()
         
         if not current_expiry:
             return jsonify({'error': 'License not found'}), 404
@@ -605,11 +840,19 @@ def extend_license(license_key):
         current_expiry_date = datetime.fromisoformat(current_expiry['expiry_date'])
         new_expiry_date = max(current_expiry_date, datetime.now()) + timedelta(days=30)
         
-        conn.execute(
-            'UPDATE licenses SET expiry_date = ?, active = 1 WHERE license_key_hash = ?',
-            (new_expiry_date.isoformat(), key_hash)
-        )
-        conn.commit()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute(
+                'UPDATE licenses SET expiry_date = %s, active = 1 WHERE license_key_hash = %s',
+                (new_expiry_date.isoformat(), key_hash)
+            )
+            conn.commit()
+        else:
+            conn.execute(
+                'UPDATE licenses SET expiry_date = ?, active = 1 WHERE license_key_hash = ?',
+                (new_expiry_date.isoformat(), key_hash)
+            )
+            conn.commit()
         
         log_license_history(license_key, 'ADMIN', 'EXTENDED', 
                           f'Extended to {new_expiry_date.strftime("%Y-%m-%d")}')
@@ -626,19 +869,35 @@ def deactivate_license(license_key):
     
     try:
         with get_db() as conn:
-            existing = conn.execute(
-                'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = ?',
-                (key_hash,)
-            ).fetchone()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = %s',
+                    (key_hash,)
+                )
+                existing = cursor.fetchone()
+            else:
+                existing = conn.execute(
+                    'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = ?',
+                    (key_hash,)
+                ).fetchone()
             
             if not existing:
                 return jsonify({'error': 'License not found'}), 404
             
-            conn.execute(
-                'UPDATE licenses SET active = 0 WHERE license_key_hash = ?',
-                (key_hash,)
-            )
-            conn.commit()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'UPDATE licenses SET active = 0 WHERE license_key_hash = %s',
+                    (key_hash,)
+                )
+                conn.commit()
+            else:
+                conn.execute(
+                    'UPDATE licenses SET active = 0 WHERE license_key_hash = ?',
+                    (key_hash,)
+                )
+                conn.commit()
             
             log_validation_attempt(license_key, 'ADMIN', 'DEACTIVATED_BY_ADMIN', 
                                  f'Admin action from IP: {get_real_ip()}')
@@ -658,19 +917,35 @@ def activate_license(license_key):
     
     try:
         with get_db() as conn:
-            existing = conn.execute(
-                'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = ?',
-                (key_hash,)
-            ).fetchone()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = %s',
+                    (key_hash,)
+                )
+                existing = cursor.fetchone()
+            else:
+                existing = conn.execute(
+                    'SELECT license_key_hash, active FROM licenses WHERE license_key_hash = ?',
+                    (key_hash,)
+                ).fetchone()
             
             if not existing:
                 return jsonify({'error': 'License not found'}), 404
             
-            conn.execute(
-                'UPDATE licenses SET active = 1 WHERE license_key_hash = ?',
-                (key_hash,)
-            )
-            conn.commit()
+            if USE_POSTGRES:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'UPDATE licenses SET active = 1 WHERE license_key_hash = %s',
+                    (key_hash,)
+                )
+                conn.commit()
+            else:
+                conn.execute(
+                    'UPDATE licenses SET active = 1 WHERE license_key_hash = ?',
+                    (key_hash,)
+                )
+                conn.commit()
             
             log_validation_attempt(license_key, 'ADMIN', 'ACTIVATED_BY_ADMIN', 
                                  f'Admin action from IP: {get_real_ip()}')
@@ -693,18 +968,19 @@ def delete_license(license_key):
                              f'Permanent deletion from IP: {get_real_ip()}')
         log_license_history(license_key, 'ADMIN', 'DELETED', 'Permanently deleted')
         
-        conn.execute('DELETE FROM licenses WHERE license_key_hash = ?', (key_hash,))
-        conn.commit()
+        if USE_POSTGRES:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM licenses WHERE license_key_hash = %s', (key_hash,))
+            conn.commit()
+        else:
+            conn.execute('DELETE FROM licenses WHERE license_key_hash = ?', (key_hash,))
+            conn.commit()
     
     return redirect('/admin')
 
-# [Include all the HTML templates from the original, with minor modifications for the enhanced features]
-
-# Enhanced templates would include:
-# - Show activation count and last activation date
-# - Option to transfer license to new hardware
-# - Show previously bound hardware IDs
-# - Enhanced security status display
+# =============================================================================
+# HTML TEMPLATES WITH ALL FIXES
+# =============================================================================
 
 LOGIN_HTML = '''
 <!DOCTYPE html>
@@ -731,7 +1007,7 @@ LOGIN_HTML = '''
         <div class="header">
             <h2>🔐 Admin Login</h2>
             <p>PDF License Server Administration</p>
-            <span class="version">v1.1.0</span>
+            <span class="version">v1.2.0</span>
         </div>
         
         {% if error %}
@@ -764,12 +1040,6 @@ LOGIN_HTML = '''
 </html>
 '''
 
-# [Include the rest of the HTML templates - they remain largely the same]
-# The main changes would be in the ADMIN_HTML template to show:
-# - Activation count
-# - Previously bound hardware
-# - Transfer license option
-
 ADMIN_HTML = '''
 <!DOCTYPE html>
 <html>
@@ -799,19 +1069,27 @@ ADMIN_HTML = '''
         .btn-danger { background: #e53e3e; }
         .btn:hover { opacity: 0.8; }
         .logout-btn { background: #e53e3e; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
-        .security-stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 15px 0; }
-        .security-stat { background: #f8f9fa; padding: 10px 15px; border-radius: 8px; border-left: 4px solid #667eea; }
+        .security-events { margin: 20px 0; }
+        .security-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 15px 0; }
+        .security-event { padding: 12px 16px; border-radius: 10px; border-left: 4px solid; font-size: 13px; font-weight: 500; transition: all 0.3s ease; }
+        .security-event:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .event-valid { background: #f0fff4; border-color: #38a169; color: #2f855a; }
+        .event-error { background: #fff5f5; border-color: #e53e3e; color: #c53030; }
+        .event-warning { background: #fffbeb; border-color: #f59e0b; color: #d97706; }
+        .event-info { background: #f0f9ff; border-color: #3b82f6; color: #2563eb; }
         .ip-address { font-family: 'Courier New', monospace; background: #fff3cd; padding: 2px 4px; border-radius: 3px; font-size: 10px; }
-        .activation-info { background: #e6f4ff; padding: 4px 8px; border-radius: 4px; font-size: 11px; text-align: center; }
-        .activation-count { font-weight: bold; color: #1890ff; }
-        .activation-date { color: #666; font-size: 10px; }
+        .activation-info { background: #e6f4ff; padding: 4px 8px; border-radius: 4px; font-size: 11px; text-align: center; min-width: 60px; }
+        .activation-count { font-weight: bold; color: #1890ff; display: block; font-size: 14px; }
+        .activation-date { color: #666; font-size: 10px; margin-top: 2px; }
+        .event-title { font-weight: bold; margin-bottom: 4px; text-transform: capitalize; }
+        .event-count { font-size: 18px; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="header">
         <div>
             <h1>🔐 License Administration</h1>
-            <p>PDF Metadata Tool License Management v1.1.0</p>
+            <p>PDF Metadata Tool License Management v1.2.0</p>
         </div>
         <div>
             <a href="/admin/create" class="btn btn-success">+ Create License</a>
@@ -844,13 +1122,20 @@ ADMIN_HTML = '''
         </div>
         
         {% if security_stats %}
-        <h3>📊 Security Events (Last 7 Days)</h3>
-        <div class="security-stats">
-            {% for stat in security_stats %}
-            <div class="security-stat">
-                <strong>{{ stat.status }}:</strong> {{ stat.count }}
+        <div class="security-events">
+            <h3>🛡️ Security Events (Last 7 Days)</h3>
+            <div class="security-grid">
+                {% for stat in security_stats %}
+                <div class="security-event 
+                    {% if stat.status in ['VALID', 'VALID_FIRST_USE', 'VALID_REACTIVATION'] %}event-valid
+                    {% elif stat.status in ['HARDWARE_MISMATCH', 'EXPIRED', 'DEACTIVATED'] %}event-error
+                    {% elif stat.status in ['MISSING_KEY', 'MISSING_HARDWARE_ID', 'INVALID_KEY'] %}event-warning
+                    {% else %}event-info{% endif %}">
+                    <div class="event-title">{{ stat.status.replace('_', ' ').title() }}</div>
+                    <div class="event-count">{{ stat.count }} events</div>
+                </div>
+                {% endfor %}
             </div>
-            {% endfor %}
         </div>
         {% endif %}
         
@@ -901,35 +1186,25 @@ ADMIN_HTML = '''
                         <div class="activation-info">
                             <span class="activation-count">{{ license.activation_count or 0 }}</span>
                             {% if license.last_activation_date %}
-                                <br><span class="activation-date">{{ license.last_activation_date[:10] }}</span>
+                                <div class="activation-date">{{ license.last_activation_date[:10] }}</div>
                             {% else %}
-                                <br><span class="activation-date">Never</span>
+                                <div class="activation-date">Never</div>
                             {% endif %}
                         </div>
                     </td>
                     <td>{{ license.last_used[:10] if license.last_used else 'Never' }}</td>
                     <td>
-                        {% if license.calculated_status == 'active' %}
-                            <form method="POST" action="/admin/deactivate/{{ license.license_key }}" style="display: inline;">
-                                <button type="submit" class="btn btn-warning" onclick="return confirm('⏸️ DEACTIVATE license {{ license.license_key[:20] }}...?\\n\\nThis will temporarily disable the license but keep it in the system.\\nUser will see a deactivation message and can be reactivated later.')">⏸️ Deactivate</button>
-                            </form>
-                        {% elif license.calculated_status == 'deactivated' %}
-                            <form method="POST" action="/admin/activate/{{ license.license_key }}" style="display: inline;">
-                                <button type="submit" class="btn btn-success" onclick="return confirm('▶️ ACTIVATE license {{ license.license_key[:20] }}...?\\n\\nThis will restore the license and allow the user to continue using it.')">▶️ Activate</button>
-                            </form>
-                        {% else %}
-                            <form method="POST" action="/admin/activate/{{ license.license_key }}" style="display: inline;">
-                                <button type="submit" class="btn btn-success">🔄 Reactivate</button>
-                            </form>
-                        {% endif %}
-                        
-                        <form method="POST" action="/admin/extend/{{ license.license_key }}" style="display: inline;">
-                            <button type="submit" class="btn btn-warning" onclick="return confirm('📅 EXTEND license by 30 days?\\n\\nCurrent expiry: {{ license.expiry_date[:10] }}')">📅 +30 Days</button>
-                        </form>
-                        
-                        <form method="POST" action="/admin/delete/{{ license.license_key }}" style="display: inline;">
-                            <button type="submit" class="btn btn-danger" onclick="return confirm('🗑️ PERMANENTLY DELETE license {{ license.license_key }}?\\n\\n⚠️ WARNING: This CANNOT be undone!\\n⚠️ The license will be completely removed from the database!\\n⚠️ The user will lose access permanently!\\n\\nOnly do this for refunds or permanent bans.\\n\\nAre you absolutely sure?')" style="margin-left: 10px;">🗑️ DELETE</button>
-                        </form>
+                        <div style="white-space: nowrap;">
+                            {% if license.calculated_status != 'expired' %}
+                                {% if license.active %}
+                                    <button class="btn btn-warning" onclick="deactivateLicense('{{ license.license_key }}')">⏸️ Deactivate</button>
+                                {% else %}
+                                    <button class="btn btn-success" onclick="activateLicense('{{ license.license_key }}')">▶️ Activate</button>
+                                {% endif %}
+                            {% endif %}
+                            <button class="btn btn-warning" onclick="extendLicense('{{ license.license_key }}')">📅 +30 Days</button>
+                            <button class="btn btn-danger" onclick="deleteLicense('{{ license.license_key }}')" style="margin-left: 5px;">🗑️ DELETE</button>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -976,6 +1251,72 @@ ADMIN_HTML = '''
             </tbody>
         </table>
     </div>
+
+    <script>
+        function deactivateLicense(key) {
+            if (confirm('⏸️ Deactivate license ' + key.substring(0, 20) + '...?\\n\\nThis will temporarily disable the license but keep it in the system.\\nUser will see a deactivation message and can be reactivated later.')) {
+                fetch('/admin/deactivate/' + encodeURIComponent(key), { method: 'POST' })
+                    .then(response => {
+                        if (response.ok) {
+                            location.reload();
+                        } else {
+                            alert('Failed to deactivate license');
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error.message);
+                    });
+            }
+        }
+        
+        function activateLicense(key) {
+            if (confirm('▶️ Activate license ' + key.substring(0, 20) + '...?\\n\\nThis will restore the license and allow the user to continue using it.')) {
+                fetch('/admin/activate/' + encodeURIComponent(key), { method: 'POST' })
+                    .then(response => {
+                        if (response.ok) {
+                            location.reload();
+                        } else {
+                            alert('Failed to activate license');
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error.message);
+                    });
+            }
+        }
+        
+        function extendLicense(key) {
+            if (confirm('📅 Extend license by 30 days?\\n\\nThis will add 30 days to the current expiry date.')) {
+                fetch('/admin/extend/' + encodeURIComponent(key), { method: 'POST' })
+                    .then(response => {
+                        if (response.ok) {
+                            location.reload();
+                        } else {
+                            alert('Failed to extend license');
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error.message);
+                    });
+            }
+        }
+        
+        function deleteLicense(key) {
+            if (confirm('🗑️ PERMANENTLY DELETE license ' + key + '?\\n\\n⚠️ WARNING: This CANNOT be undone!\\n⚠️ The license will be completely removed from the database!\\n⚠️ The user will lose access permanently!\\n\\nOnly do this for refunds or permanent bans.\\n\\nAre you absolutely sure?')) {
+                fetch('/admin/delete/' + encodeURIComponent(key), { method: 'POST' })
+                    .then(response => {
+                        if (response.ok) {
+                            location.reload();
+                        } else {
+                            alert('Failed to delete license');
+                        }
+                    })
+                    .catch(error => {
+                        alert('Error: ' + error.message);
+                    });
+            }
+        }
+    </script>
 </body>
 </html>
 '''
@@ -1203,8 +1544,3 @@ CHECK_RESULT_HTML = '''
 </body>
 </html>
 '''
-
-if __name__ == '__main__':
-    init_db()
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
