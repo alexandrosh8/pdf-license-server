@@ -1,0 +1,44 @@
+services:
+  - type: web
+    name: pdf-license-server
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn.conf.py app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.5
+      - key: WEB_CONCURRENCY
+        value: 1
+      - key: PORT
+        generateValue: true
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ENABLE_METRICS
+        value: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pdf-license-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: pdf-license-cache
+          property: connectionString
+
+databases:
+  - name: pdf-license-db
+    databaseName: licenses
+    user: pdf_user
+
+services:
+  - type: redis
+    name: pdf-license-cache
+    ipAllowList: []
