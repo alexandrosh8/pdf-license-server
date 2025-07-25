@@ -1,56 +1,56 @@
-# Gunicorn configuration for FastAPI async application
 import os
 import multiprocessing
 
 # Server socket
-bind = f"0.0.0.0:{os.getenv('PORT', '10000')}"
+bind = f"0.0.0.0:{os.getenv('PORT', '8000')}"
 backlog = 2048
 
-# Worker processes
-workers = int(os.getenv('WEB_CONCURRENCY', '1'))
+# Worker processes - conservative for free tier
+workers = 1
 worker_class = "uvicorn.workers.UvicornWorker"
 worker_connections = 1000
-max_requests = 1000
-max_requests_jitter = 50
-preload_app = True
 
-# Logging
-loglevel = "info"
-accesslog = "-"
-errorlog = "-"
-access_log_format = '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s" %(D)s'
-
-# Process naming
-proc_name = 'pdf_license_server'
-
-# Server mechanics
-daemon = False
-pidfile = None  # Don't use pidfile on Render
-user = None
-group = None
-tmp_upload_dir = None
-
-# SSL (not needed for Render)
-keyfile = None
-certfile = None
-
-# Timeout settings
-timeout = 30
+# Timeouts optimized for Render
+timeout = 120
 keepalive = 5
 graceful_timeout = 30
 
-# Memory management
-limit_request_line = 0
-limit_request_field_size = 0
+# Restart workers after this many requests (memory management)
+max_requests = 1000
+max_requests_jitter = 100
 
-# Security
-forwarded_allow_ips = "*"  # Allow Render's load balancer
-secure_scheme_headers = {
-    'X-FORWARDED-PROTOCOL': 'ssl',
-    'X-FORWARDED-PROTO': 'https',
-    'X-FORWARDED-SSL': 'on'
-}
+# Logging - JSON format for better parsing
+accesslog = "-"
+errorlog = "-"
+loglevel = "info"
+access_log_format = '{"time": "%(t)s", "method": "%(m)s", "url": "%(U)s", "status": %(s)s, "bytes": %(b)s, "duration": %(D)s, "ip": "%(h)s", "user_agent": "%(a)s"}'
 
-# Enable for debugging
-# capture_output = True
-# enable_stdio_inheritance = True
+# Process naming
+proc_name = "pdf_license_server"
+
+# Worker temporary directory (use /tmp on Render)
+worker_tmp_dir = "/tmp"
+
+# Preload app for better memory usage
+preload_app = True
+
+# Security and limits
+limit_request_line = 4094
+limit_request_fields = 100
+limit_request_field_size = 8190
+
+# Signal handling
+forwarded_allow_ips = "*"
+proxy_allow_ips = "*"
+
+# Enable worker recycling to prevent memory leaks
+max_worker_memory = 200  # MB
+
+def when_ready(server):
+    server.log.info("PDF License Server ready to accept connections")
+
+def worker_exit(server, worker):
+    server.log.info(f"Worker {worker.pid} exited")
+
+def on_exit(server):
+    server.log.info("PDF License Server shutting down")
