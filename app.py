@@ -109,64 +109,78 @@ async def init_database():
         
         async with db_pool.acquire() as conn:
             # Create tables with proper PostgreSQL types
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS licenses (
-                    id SERIAL PRIMARY KEY,
-                    license_key VARCHAR(255) UNIQUE NOT NULL,
-                    customer_email VARCHAR(255) NOT NULL,
-                    customer_name VARCHAR(255),
-                    hardware_id VARCHAR(64),
-                    created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                    expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
-                    last_validated TIMESTAMP WITH TIME ZONE,
-                    validation_count INTEGER DEFAULT 0,
-                    hardware_changes INTEGER DEFAULT 0,
-                    previous_hardware_ids TEXT,
-                    active BOOLEAN DEFAULT true,
-                    notes TEXT,
-                    created_by VARCHAR(255) DEFAULT 'system'
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS activity_logs (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                    license_key VARCHAR(255),
-                    action VARCHAR(255) NOT NULL,
-                    status VARCHAR(255),
-                    hardware_id VARCHAR(64),
-                    ip_address INET,
-                    details JSONB
-                )
-            ''')
-            
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS app_versions (
-                    id SERIAL PRIMARY KEY,
-                    version VARCHAR(255) UNIQUE NOT NULL,
-                    filename VARCHAR(255) NOT NULL,
-                    file_size BIGINT NOT NULL,
-                    checksum VARCHAR(255) NOT NULL,
-                    release_notes TEXT,
-                    is_critical BOOLEAN DEFAULT false,
-                    min_required_version VARCHAR(255),
-                    created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                    download_count INTEGER DEFAULT 0,
-                    active BOOLEAN DEFAULT true
-                )
-            ''')
-            
-            # Create indexes for performance
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_active ON licenses(active)')
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON activity_logs(timestamp)')
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_logs_license ON activity_logs(license_key)')
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_versions_version ON app_versions(version)')
-            await conn.execute('CREATE INDEX IF NOT EXISTS idx_versions_active ON app_versions(active)')
-            
-            logger.info({"event": "Database initialized successfully", "db_type": "PostgreSQL"})
+            try:
+                # Licenses table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS licenses (
+                        id SERIAL PRIMARY KEY,
+                        license_key VARCHAR(255) UNIQUE NOT NULL,
+                        customer_email VARCHAR(255) NOT NULL,
+                        customer_name VARCHAR(255),
+                        hardware_id VARCHAR(64),
+                        created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                        expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                        last_validated TIMESTAMP WITH TIME ZONE,
+                        validation_count INTEGER DEFAULT 0,
+                        hardware_changes INTEGER DEFAULT 0,
+                        previous_hardware_ids TEXT,
+                        active BOOLEAN DEFAULT true,
+                        notes TEXT,
+                        created_by VARCHAR(255) DEFAULT 'system'
+                    )
+                ''')
+                
+                # Activity logs table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS activity_logs (
+                        id SERIAL PRIMARY KEY,
+                        timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                        license_key VARCHAR(255),
+                        action VARCHAR(255) NOT NULL,
+                        status VARCHAR(255),
+                        hardware_id VARCHAR(64),
+                        ip_address INET,
+                        details JSONB
+                    )
+                ''')
+                
+                # App versions table
+                await conn.execute('''
+                    CREATE TABLE IF NOT EXISTS app_versions (
+                        id SERIAL PRIMARY KEY,
+                        version VARCHAR(255) UNIQUE NOT NULL,
+                        filename VARCHAR(255) NOT NULL,
+                        file_size BIGINT NOT NULL,
+                        checksum VARCHAR(255) NOT NULL,
+                        release_notes TEXT,
+                        is_critical BOOLEAN DEFAULT false,
+                        min_required_version VARCHAR(255),
+                        created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                        download_count INTEGER DEFAULT 0,
+                        active BOOLEAN DEFAULT true
+                    )
+                ''')
+                
+                # Wait for table creation to complete
+                await conn.execute('SELECT 1')
+                
+                # Now create indexes - only after tables exist
+                try:
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_active ON licenses(active)')
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON activity_logs(timestamp)')
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_logs_license ON activity_logs(license_key)')
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_versions_version ON app_versions(version)')
+                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_versions_active ON app_versions(active)')
+                except Exception as index_error:
+                    logger.warning(f"Some indexes could not be created: {index_error}")
+                
+                logger.info({"event": "Database initialized successfully", "db_type": "PostgreSQL"})
+                
+            except Exception as table_error:
+                logger.error(f"Failed to create tables: {table_error}")
+                raise
             
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
