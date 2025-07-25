@@ -1,889 +1,921 @@
 """
-🔐 RENDER-OPTIMIZED LICENSE SERVER
-===================================
-Optimized for Render.com deployment following official best practices
+🔐 PRODUCTION PDF LICENSE SERVER - FLASK
+=========================================
+Complete license server with admin panel, hardware locking, and IP tracking
 
-Version: 2.1.0
+Version: 2.2.0
+Compatible with Render.com deployment and PostgreSQL
 """
 
-import os
-import json
+from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash
 import hashlib
+import json
 import secrets
 import string
+from datetime import datetime, timedelta
+import os
 import logging
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Optional, Dict, Any, List
-import asyncio
-
-from fastapi import FastAPI, HTTPException, Depends, Request, Response, File, UploadFile, Form, status
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field
-import jwt
-import uvicorn
-import asyncpg
+from contextlib import contextmanager
+import psycopg2
+import psycopg2.extras
+from urllib.parse import urlparse
 
 # =============================================================================
-# LOGGING SETUP
+# APP CONFIGURATION
 # =============================================================================
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='{"timestamp": "%(asctime)s", "level": "%(levelname)s", "logger": "%(name)s", "message": "%(message)s"}'
-)
-logger = logging.getLogger("app")
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', secrets.token_urlsafe(32))
+
+# Admin credentials
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'Admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'changeme123')
+
+# Database configuration
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL and DATABASE_URL.startswith('postgresql://'):
+    DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgres://', 1)
+
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # =============================================================================
-# CONFIGURATION
+# DATABASE FUNCTIONS
 # =============================================================================
 
-class Config:
-    APP_NAME = "PDF License Server"
-    APP_VERSION = "2.1.0"
-    
-    # Environment-based configuration
-    SECRET_KEY = os.getenv('SECRET_KEY', secrets.token_urlsafe(32))
-    ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', 'Admin')
-    ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'changeme123')
-    JWT_ALGORITHM = "HS256"
-    JWT_EXPIRATION_HOURS = 24
-    
-    # Database configuration
-    DATABASE_URL = os.getenv('DATABASE_URL')
-    if DATABASE_URL and DATABASE_URL.startswith('postgresql://'):
-        DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgres://', 1)
-    
-    # License configuration
-    DEFAULT_DURATION_DAYS = 30
-    MAX_HARDWARE_CHANGES = 3
-    LOG_RETENTION_DAYS = 30
-    MAX_LOG_ENTRIES = 10000
-    
-    # File upload configuration
-    RELEASES_DIR = Path("releases")
-    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
-    ALLOWED_EXTENSIONS = {'.exe', '.msi', '.zip', '.dmg', '.pkg'}
-    
-    # Server configuration
-    PORT = int(os.getenv('PORT', 8000))
-    HOST = os.getenv('HOST', '0.0.0.0')
-    
-    # Render environment detection
-    IS_RENDER = os.getenv('RENDER') is not None
-    RENDER_EXTERNAL_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')
+def get_db_connection():
+    """Get database connection - PostgreSQL for Render, SQLite for local"""
+    if DATABASE_URL:
+        # PostgreSQL for Render
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        # SQLite for local development
+        import sqlite3
+        conn = sqlite3.connect('licenses.db')
+        conn.row_factory = sqlite3.Row
+        return conn
 
-config = Config()
-config.RELEASES_DIR.mkdir(exist_ok=True)
-
-# =============================================================================
-# DATABASE SETUP
-# =============================================================================
-
-db_pool = None
-
-async def init_database():
-    """Initialize PostgreSQL database for Render"""
-    global db_pool
-    
-    if not config.DATABASE_URL:
-        logger.error("DATABASE_URL environment variable not set")
-        raise ValueError("DATABASE_URL is required")
-    
+def init_db():
+    """Initialize the license database with proper schema"""
     try:
-        # Create connection pool with proper settings for Render
-        db_pool = await asyncpg.create_pool(
-            config.DATABASE_URL,
-            min_size=1,
-            max_size=5,  # Conservative for free tier
-            command_timeout=30,
-            server_settings={
-                'application_name': config.APP_NAME,
-                'timezone': 'UTC'
-            }
-        )
-        
-        logger.info("Connected to database postgresql://...")
-        
-        async with db_pool.acquire() as conn:
-            # Create tables with proper PostgreSQL types
-            try:
-                # Licenses table
-                await conn.execute('''
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                # PostgreSQL schema
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        CREATE TABLE IF NOT EXISTS licenses (
+                            id SERIAL PRIMARY KEY,
+                            license_key VARCHAR(255) UNIQUE NOT NULL,
+                            hardware_id VARCHAR(255),
+                            customer_email VARCHAR(255) NOT NULL,
+                            customer_name VARCHAR(255),
+                            created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                            payment_id VARCHAR(255),
+                            active BOOLEAN DEFAULT true,
+                            last_used TIMESTAMP WITH TIME ZONE,
+                            validation_count INTEGER DEFAULT 0,
+                            created_by VARCHAR(255) DEFAULT 'system'
+                        )
+                    ''')
+                    
+                    cur.execute('''
+                        CREATE TABLE IF NOT EXISTS validation_logs (
+                            id SERIAL PRIMARY KEY,
+                            license_key VARCHAR(255),
+                            hardware_id VARCHAR(255),
+                            timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            status VARCHAR(100),
+                            ip_address INET,
+                            user_agent TEXT,
+                            details JSONB
+                        )
+                    ''')
+                    
+                    cur.execute('''
+                        CREATE TABLE IF NOT EXISTS admin_sessions (
+                            id SERIAL PRIMARY KEY,
+                            session_id VARCHAR(255),
+                            username VARCHAR(255),
+                            ip_address INET,
+                            login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        )
+                    ''')
+                    
+                    # Create indexes
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_timestamp ON validation_logs(timestamp)')
+                    
+            else:
+                # SQLite schema for local development
+                cur = conn.cursor()
+                cur.execute('''
                     CREATE TABLE IF NOT EXISTS licenses (
-                        id SERIAL PRIMARY KEY,
-                        license_key VARCHAR(255) UNIQUE NOT NULL,
-                        customer_email VARCHAR(255) NOT NULL,
-                        customer_name VARCHAR(255),
-                        hardware_id VARCHAR(64),
-                        created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                        expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
-                        last_validated TIMESTAMP WITH TIME ZONE,
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        license_key TEXT UNIQUE NOT NULL,
+                        hardware_id TEXT,
+                        customer_email TEXT NOT NULL,
+                        customer_name TEXT,
+                        created_date TEXT NOT NULL,
+                        expiry_date TEXT NOT NULL,
+                        payment_id TEXT,
+                        active INTEGER DEFAULT 1,
+                        last_used TEXT,
                         validation_count INTEGER DEFAULT 0,
-                        hardware_changes INTEGER DEFAULT 0,
-                        previous_hardware_ids TEXT,
-                        active BOOLEAN DEFAULT true,
-                        notes TEXT,
-                        created_by VARCHAR(255) DEFAULT 'system'
+                        created_by TEXT DEFAULT 'system'
                     )
                 ''')
                 
-                # Activity logs table
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS activity_logs (
-                        id SERIAL PRIMARY KEY,
-                        timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                        license_key VARCHAR(255),
-                        action VARCHAR(255) NOT NULL,
-                        status VARCHAR(255),
-                        hardware_id VARCHAR(64),
-                        ip_address INET,
-                        details JSONB
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS validation_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        license_key TEXT,
+                        hardware_id TEXT,
+                        timestamp TEXT,
+                        status TEXT,
+                        ip_address TEXT,
+                        user_agent TEXT,
+                        details TEXT
                     )
                 ''')
                 
-                # App versions table
-                await conn.execute('''
-                    CREATE TABLE IF NOT EXISTS app_versions (
-                        id SERIAL PRIMARY KEY,
-                        version VARCHAR(255) UNIQUE NOT NULL,
-                        filename VARCHAR(255) NOT NULL,
-                        file_size BIGINT NOT NULL,
-                        checksum VARCHAR(255) NOT NULL,
-                        release_notes TEXT,
-                        is_critical BOOLEAN DEFAULT false,
-                        min_required_version VARCHAR(255),
-                        created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                        download_count INTEGER DEFAULT 0,
-                        active BOOLEAN DEFAULT true
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS admin_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT,
+                        username TEXT,
+                        ip_address TEXT,
+                        login_time TEXT,
+                        last_activity TEXT
                     )
                 ''')
                 
-                # Wait for table creation to complete
-                await conn.execute('SELECT 1')
-                
-                # Now create indexes - only after tables exist
-                try:
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_licenses_active ON licenses(active)')
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON activity_logs(timestamp)')
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_logs_license ON activity_logs(license_key)')
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_versions_version ON app_versions(version)')
-                    await conn.execute('CREATE INDEX IF NOT EXISTS idx_versions_active ON app_versions(active)')
-                except Exception as index_error:
-                    logger.warning(f"Some indexes could not be created: {index_error}")
-                
-                logger.info({"event": "Database initialized successfully", "db_type": "PostgreSQL"})
-                
-            except Exception as table_error:
-                logger.error(f"Failed to create tables: {table_error}")
-                raise
+            conn.commit()
+            logger.info("Database initialized successfully")
             
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Database initialization failed: {e}")
         raise
-
-# =============================================================================
-# PYDANTIC MODELS
-# =============================================================================
-
-class LicenseValidationRequest(BaseModel):
-    license_key: str = Field(..., min_length=10, max_length=50)
-    hardware_id: str = Field(..., min_length=5, max_length=64)
-    app_name: Optional[str] = None
-    app_version: Optional[str] = None
-    client_timestamp: Optional[str] = None
-
-class LicenseCreateRequest(BaseModel):
-    customer_email: EmailStr
-    customer_name: Optional[str] = None
-    duration_days: int = Field(default=30, ge=1, le=3650)
-    hardware_id: Optional[str] = None
-    notes: Optional[str] = None
-
-class AdminLoginRequest(BaseModel):
-    username: str
-    password: str
-
-class VersionCheckRequest(BaseModel):
-    current_version: str
-    app_name: Optional[str] = None
 
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
 
-def generate_license_key() -> str:
-    """Generate a unique license key"""
+def generate_license_key():
+    """Generate a unique license key in SLIC format"""
     segments = []
     for _ in range(4):
         segment = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
         segments.append(segment)
     return f"SLIC-{'-'.join(segments)}"
 
-async def log_activity(license_key: Optional[str], action: str, status: str, 
-                      hardware_id: Optional[str] = None, ip_address: Optional[str] = None, 
-                      details: Optional[Dict] = None):
-    """Log activity to database"""
+def log_validation(license_key, hardware_id, status, ip_address, user_agent=None, details=None):
+    """Log validation attempt"""
     try:
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                await conn.execute('''
-                    INSERT INTO activity_logs (license_key, action, status, hardware_id, ip_address, details)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                ''', 
-                    license_key,
-                    action,
-                    status,
-                    hardware_id,
-                    ip_address,
-                    json.dumps(details) if details else None
-                )
-                
-        logger.info({
-            "event": f"{action} {status}".lower(),
-            "license_key": license_key,
-            "hardware_id": hardware_id,
-            "ip_address": ip_address
-        })
-            
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        INSERT INTO validation_logs (license_key, hardware_id, status, ip_address, user_agent, details)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    ''', (license_key, hardware_id, status, ip_address, user_agent, 
+                          json.dumps(details) if details else None))
+            else:
+                cur = conn.cursor()
+                cur.execute('''
+                    INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address, user_agent, details)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (license_key, hardware_id, datetime.now().isoformat(), status, ip_address, user_agent,
+                      json.dumps(details) if details else None))
+            conn.commit()
     except Exception as e:
-        logger.error(f"Failed to log activity: {e}")
+        logger.error(f"Failed to log validation: {e}")
 
-def version_compare(version1: str, version2: str) -> int:
-    """Compare two version strings"""
-    def version_tuple(v):
-        try:
-            return tuple(map(int, v.split(".")))
-        except:
-            return (0, 0, 0)
-    
-    v1_tuple = version_tuple(version1)
-    v2_tuple = version_tuple(version2)
-    
-    if v1_tuple < v2_tuple:
-        return -1
-    elif v1_tuple > v2_tuple:
-        return 1
-    else:
-        return 0
-
-async def validate_license(license_key: str, hardware_id: str, ip_address: str) -> Dict[str, Any]:
-    """Validate a license key with proper error handling"""
+def log_admin_session(username, ip_address):
+    """Log admin login session"""
     try:
-        if not db_pool:
-            await log_activity(license_key, "VALIDATION", "DB_ERROR", hardware_id, ip_address)
-            return {"valid": False, "reason": "Database unavailable"}
+        session_id = secrets.token_urlsafe(32)
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        INSERT INTO admin_sessions (session_id, username, ip_address)
+                        VALUES (%s, %s, %s)
+                    ''', (session_id, username, ip_address))
+            else:
+                cur = conn.cursor()
+                cur.execute('''
+                    INSERT INTO admin_sessions (session_id, username, ip_address, login_time)
+                    VALUES (?, ?, ?, ?)
+                ''', (session_id, username, ip_address, datetime.now().isoformat()))
+            conn.commit()
+        return session_id
+    except Exception as e:
+        logger.error(f"Failed to log admin session: {e}")
+        return None
+
+def create_license(customer_email, customer_name=None, duration_days=30, created_by='system'):
+    """Create a new license"""
+    license_key = generate_license_key()
+    created_date = datetime.now()
+    expiry_date = created_date + timedelta(days=duration_days)
+    
+    try:
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        INSERT INTO licenses (license_key, customer_email, customer_name, 
+                                            expiry_date, created_by)
+                        VALUES (%s, %s, %s, %s, %s)
+                    ''', (license_key, customer_email, customer_name, expiry_date, created_by))
+            else:
+                cur = conn.cursor()
+                cur.execute('''
+                    INSERT INTO licenses (license_key, customer_email, customer_name, 
+                                        created_date, expiry_date, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (license_key, customer_email, customer_name, 
+                      created_date.isoformat(), expiry_date.isoformat(), created_by))
+            conn.commit()
             
-        async with db_pool.acquire() as conn:
-            # Get license
-            license_row = await conn.fetchrow(
-                'SELECT * FROM licenses WHERE license_key = $1 AND active = true',
-                license_key
-            )
+        return {
+            'license_key': license_key,
+            'expiry_date': expiry_date.strftime('%Y-%m-%d'),
+            'customer_email': customer_email,
+            'duration_days': duration_days
+        }
+    except Exception as e:
+        logger.error(f"Failed to create license: {e}")
+        raise
+
+# =============================================================================
+# API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/validate', methods=['POST'])
+def validate_license():
+    """Validate a license key from the desktop application"""
+    try:
+        data = request.get_json()
+        license_key = data.get('license_key')
+        hardware_id = data.get('hardware_id')
+        client_ip = request.remote_addr
+        user_agent = request.headers.get('User-Agent')
+        
+        if not license_key:
+            return jsonify({
+                "valid": False,
+                "reason": "Missing license key"
+            }), 400
+        
+        if not hardware_id:
+            return jsonify({
+                "valid": False,
+                "reason": "Missing hardware ID"
+            }), 400
+        
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        'SELECT * FROM licenses WHERE license_key = %s AND active = true',
+                        (license_key,)
+                    )
+                    license_row = cur.fetchone()
+            else:
+                cur = conn.cursor()
+                license_row = cur.execute(
+                    'SELECT * FROM licenses WHERE license_key = ? AND active = 1',
+                    (license_key,)
+                ).fetchone()
             
             if not license_row:
-                await log_activity(license_key, "VALIDATION", "INVALID_KEY", hardware_id, ip_address)
-                return {"valid": False, "reason": "Invalid or inactive license key"}
+                log_validation(license_key, hardware_id, 'INVALID_KEY', client_ip, user_agent)
+                return jsonify({
+                    "valid": False,
+                    "reason": "Invalid license key"
+                }), 400
             
-            # Check expiry
-            expiry_date = license_row['expiry_date']
-            now = datetime.now(timezone.utc)
+            # Check expiration
+            if DATABASE_URL:
+                expiry_date = license_row['expiry_date']
+                current_date = datetime.now(expiry_date.tzinfo if expiry_date.tzinfo else None)
+            else:
+                expiry_date = datetime.fromisoformat(license_row['expiry_date'])
+                current_date = datetime.now()
             
-            if expiry_date < now:
-                await log_activity(license_key, "VALIDATION", "EXPIRED", hardware_id, ip_address)
-                return {"valid": False, "reason": "License has expired"}
+            if current_date > expiry_date:
+                log_validation(license_key, hardware_id, 'EXPIRED', client_ip, user_agent)
+                return jsonify({
+                    "valid": False,
+                    "reason": "License expired",
+                    "expired_date": license_row['expiry_date'],
+                    "renewal_url": f"{request.host_url}renew/{license_key}"
+                }), 400
             
             # Hardware binding logic
             stored_hardware_id = license_row['hardware_id']
             
             if not stored_hardware_id:
-                # First binding
-                await conn.execute('''
-                    UPDATE licenses 
-                    SET hardware_id = $1, last_validated = $2, validation_count = validation_count + 1
-                    WHERE license_key = $3
-                ''', hardware_id, now, license_key)
-                
-                await log_activity(license_key, "VALIDATION", "FIRST_BINDING", hardware_id, ip_address)
+                # First time binding - bind to this hardware
+                if DATABASE_URL:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            'UPDATE licenses SET hardware_id = %s, last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
+                            (hardware_id, datetime.now(), license_key)
+                        )
+                else:
+                    cur.execute(
+                        'UPDATE licenses SET hardware_id = ?, last_used = ?, validation_count = validation_count + 1 WHERE license_key = ?',
+                        (hardware_id, datetime.now().isoformat(), license_key)
+                    )
+                conn.commit()
+                log_validation(license_key, hardware_id, 'FIRST_BINDING', client_ip, user_agent)
                 
             elif stored_hardware_id != hardware_id:
-                # Hardware change
-                hardware_changes = license_row['hardware_changes']
-                
-                if hardware_changes >= config.MAX_HARDWARE_CHANGES:
-                    await log_activity(license_key, "VALIDATION", "MAX_HARDWARE_EXCEEDED", hardware_id, ip_address)
-                    return {"valid": False, "reason": "Maximum hardware changes exceeded"}
-                
-                # Update hardware
-                previous_ids = license_row['previous_hardware_ids'] or ''
-                if previous_ids:
-                    previous_ids += ','
-                previous_ids += stored_hardware_id
-                
-                await conn.execute('''
-                    UPDATE licenses 
-                    SET hardware_id = $1, hardware_changes = hardware_changes + 1,
-                        previous_hardware_ids = $2, last_validated = $3, 
-                        validation_count = validation_count + 1
-                    WHERE license_key = $4
-                ''', hardware_id, previous_ids, now, license_key)
-                
-                await log_activity(license_key, "VALIDATION", "HARDWARE_CHANGED", hardware_id, ip_address)
-                
+                # Hardware mismatch - license is locked to different hardware
+                log_validation(license_key, hardware_id, 'HARDWARE_MISMATCH', client_ip, user_agent, 
+                             {'expected': stored_hardware_id, 'provided': hardware_id})
+                return jsonify({
+                    "valid": False,
+                    "reason": "License is locked to a different computer",
+                    "message": "This license is already activated on another computer. Each license can only be used on one computer."
+                }), 400
             else:
-                # Normal validation
-                await conn.execute('''
-                    UPDATE licenses 
-                    SET last_validated = $1, validation_count = validation_count + 1
-                    WHERE license_key = $2
-                ''', now, license_key)
-                
-                await log_activity(license_key, "VALIDATION", "SUCCESS", hardware_id, ip_address)
+                # Valid hardware - update last used
+                if DATABASE_URL:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            'UPDATE licenses SET last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
+                            (datetime.now(), license_key)
+                        )
+                else:
+                    cur.execute(
+                        'UPDATE licenses SET last_used = ?, validation_count = validation_count + 1 WHERE license_key = ?',
+                        (datetime.now().isoformat(), license_key)
+                    )
+                conn.commit()
             
-            # Calculate days remaining
-            days_remaining = (expiry_date - now).days
+            log_validation(license_key, hardware_id, 'VALID', client_ip, user_agent)
             
-            return {
+            days_remaining = (expiry_date - current_date).days
+            
+            return jsonify({
                 "valid": True,
-                "license_key": license_key,
-                "customer_email": license_row['customer_email'],
-                "expiry_date": expiry_date.isoformat(),
+                "message": "License is valid",
+                "expiry_date": expiry_date.isoformat() if DATABASE_URL else license_row['expiry_date'],
                 "days_remaining": max(0, days_remaining),
+                "customer_email": license_row['customer_email'],
                 "validation_count": license_row['validation_count'] + 1,
-                "hardware_changes": license_row['hardware_changes']
-            }
+                "renewal_url": f"{request.host_url}renew/{license_key}"
+            })
             
     except Exception as e:
-        logger.error(f"License validation error: {e}")
-        await log_activity(license_key, "VALIDATION", "ERROR", hardware_id, ip_address, {"error": str(e)})
-        return {"valid": False, "reason": "Validation error"}
+        logger.error(f"Validation error: {e}")
+        return jsonify({
+            "valid": False,
+            "reason": "Server error",
+            "message": "Please try again later"
+        }), 500
 
-# =============================================================================
-# AUTHENTICATION
-# =============================================================================
-
-security = HTTPBearer()
-
-def create_admin_token() -> str:
-    """Create JWT token for admin"""
-    payload = {
-        "sub": config.ADMIN_USERNAME,
-        "exp": datetime.utcnow() + timedelta(hours=config.JWT_EXPIRATION_HOURS),
-        "iat": datetime.utcnow()
-    }
-    return jwt.encode(payload, config.SECRET_KEY, algorithm=config.JWT_ALGORITHM)
-
-def verify_admin_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """Verify admin JWT token"""
-    try:
-        payload = jwt.decode(
-            credentials.credentials, 
-            config.SECRET_KEY, 
-            algorithms=[config.JWT_ALGORITHM]
-        )
-        return payload["sub"]
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-# =============================================================================
-# FASTAPI APP
-# =============================================================================
-
-app = FastAPI(
-    title="PDF License Server",
-    version=config.APP_VERSION,
-    description="Production-ready license management with auto-update",
-    docs_url="/docs" if not config.IS_RENDER else None,  # Disable docs in production
-    redoc_url="/redoc" if not config.IS_RENDER else None
-)
-
-# Add CORS middleware with proper configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"] if not config.IS_RENDER else [f"https://{config.RENDER_EXTERNAL_HOSTNAME}"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
-
-# =============================================================================
-# STARTUP/SHUTDOWN EVENTS
-# =============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize application on startup"""
-    logger.info({
-        "version": config.APP_VERSION,
-        "event": "Starting PDF License Server"
-    })
-    
-    try:
-        await init_database()
-        logger.info({"event": "Redis not configured, continuing without cache"})
-    except Exception as e:
-        logger.error(f"Startup failed: {e}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    global db_pool
-    if db_pool:
-        await db_pool.close()
-        logger.info("Disconnected from database postgresql://...")
-        logger.info({"event": "PDF License Server stopped"})
-
-# =============================================================================
-# HEALTH CHECK ENDPOINT (RENDER REQUIREMENT)
-# =============================================================================
-
-@app.get("/health", status_code=200)
-async def health_check():
-    """Health check endpoint for Render zero-downtime deployments"""
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Render"""
     try:
         # Test database connection
-        if db_pool:
-            async with db_pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor() as cur:
+                    cur.execute('SELECT 1')
+            else:
+                cur = conn.cursor()
+                cur.execute('SELECT 1')
         
-        return {
+        return jsonify({
             "status": "healthy",
-            "version": config.APP_VERSION,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "database": "connected",
-            "environment": "render" if config.IS_RENDER else "local"
-        }
+            "version": "2.2.0",
+            "timestamp": datetime.now().isoformat(),
+            "database": "connected"
+        })
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise HTTPException(status_code=503, detail="Service unhealthy")
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e)
+        }), 503
 
 # =============================================================================
-# MAIN ENDPOINTS
+# WEB INTERFACE
 # =============================================================================
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    """Root endpoint redirects to admin"""
-    return HTMLResponse(content="""
-    <html>
-        <head>
-            <meta http-equiv="refresh" content="0; url=/admin">
-            <title>PDF License Server</title>
-        </head>
-        <body>
-            <h1>PDF License Server</h1>
-            <p>Redirecting to admin panel...</p>
-            <p><a href="/admin">Go to Admin Panel</a></p>
-        </body>
-    </html>
-    """)
+@app.route('/')
+def index():
+    """Main page"""
+    return render_template_string(INDEX_HTML)
 
-@app.post("/api/validate")
-async def validate_license_endpoint(request: LicenseValidationRequest, req: Request):
-    """Validate a license key"""
-    client_ip = req.client.host
+@app.route('/admin')
+def admin():
+    """Admin panel - check credentials first"""
+    auth = request.authorization
     
-    result = await validate_license(
-        request.license_key,
-        request.hardware_id,
-        client_ip
-    )
-    
-    if result["valid"]:
-        return result
-    else:
-        raise HTTPException(status_code=400, detail=result)
-
-@app.post("/api/admin/login")
-async def admin_login(request: AdminLoginRequest, req: Request):
-    """Admin login endpoint"""
-    client_ip = req.client.host
-    
-    if request.username != config.ADMIN_USERNAME or request.password != config.ADMIN_PASSWORD:
-        await log_activity(None, "ADMIN_LOGIN", "FAILED", None, client_ip, {"username": request.username})
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    token = create_admin_token()
-    await log_activity(None, "ADMIN_LOGIN", "SUCCESS", None, client_ip, {"username": request.username})
-    
-    logger.info({
-        "username": request.username,
-        "event": "Admin login successful"
-    })
-    
-    return {
-        "access_token": token,
-        "token_type": "bearer"
-    }
-
-@app.get("/api/admin/dashboard", dependencies=[Depends(verify_admin_token)])
-async def admin_dashboard():
-    """Admin dashboard with statistics"""
-    try:
-        if not db_pool:
-            raise HTTPException(status_code=503, detail="Database unavailable")
-            
-        async with db_pool.acquire() as conn:
-            # Get license statistics with proper PostgreSQL queries
-            total_licenses = await conn.fetchval("SELECT COUNT(*) FROM licenses")
-            active_licenses = await conn.fetchval("SELECT COUNT(*) FROM licenses WHERE active = true")
-            
-            # Use proper timestamp comparison for PostgreSQL
-            valid_licenses = await conn.fetchval("""
-                SELECT COUNT(*) FROM licenses 
-                WHERE active = true AND expiry_date > NOW()
-            """)
-            
-            expired_licenses = await conn.fetchval("""
-                SELECT COUNT(*) FROM licenses 
-                WHERE expiry_date <= NOW()
-            """)
-            
-            # Get version statistics
-            total_versions = await conn.fetchval("SELECT COUNT(*) FROM app_versions WHERE active = true")
-            total_downloads = await conn.fetchval("SELECT COALESCE(SUM(download_count), 0) FROM app_versions")
-            
-            # Recent activity
-            recent_activity = await conn.fetch("""
-                SELECT timestamp, license_key, action, status, ip_address
-                FROM activity_logs 
-                ORDER BY timestamp DESC 
-                LIMIT 20
-            """)
-            
-            activity_list = []
-            for row in recent_activity:
-                activity_list.append({
-                    "timestamp": row['timestamp'].isoformat(),
-                    "license_key": row['license_key'],
-                    "action": row['action'],
-                    "status": row['status'],
-                    "ip_address": str(row['ip_address']) if row['ip_address'] else None
-                })
-            
-            return {
-                "total_licenses": total_licenses,
-                "active_licenses": active_licenses,
-                "valid_licenses": valid_licenses,
-                "expired_licenses": expired_licenses,
-                "total_versions": total_versions,
-                "total_downloads": total_downloads,
-                "recent_activity": activity_list
+    if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
+        return '''<script>
+            const credentials = prompt("Enter admin credentials (username:password):");
+            if (credentials) {
+                const [username, password] = credentials.split(":");
+                if (username === "''' + ADMIN_USERNAME + '''" && password === "''' + ADMIN_PASSWORD + '''") {
+                    location.reload();
+                } else {
+                    alert("Invalid credentials!");
+                    history.back();
+                }
+            } else {
+                history.back();
             }
+        </script>''', 401, {'WWW-Authenticate': 'Basic realm="Admin Login Required"'}
+    
+    # Log admin access
+    log_admin_session(auth.username, request.remote_addr)
+    
+    try:
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    # Get all licenses
+                    cur.execute('''
+                        SELECT license_key, customer_email, customer_name, created_date, 
+                               expiry_date, active, last_used, validation_count, hardware_id, created_by
+                        FROM licenses 
+                        ORDER BY created_date DESC
+                    ''')
+                    licenses = cur.fetchall()
+                    
+                    # Get statistics
+                    cur.execute('''
+                        SELECT 
+                            COUNT(*) as total_licenses,
+                            COUNT(CASE WHEN active = true THEN 1 END) as active_licenses,
+                            COUNT(CASE WHEN expiry_date > NOW() AND active = true THEN 1 END) as valid_licenses
+                        FROM licenses
+                    ''')
+                    stats = cur.fetchone()
+                    
+                    # Get recent admin logins with IPs
+                    cur.execute('''
+                        SELECT username, ip_address, login_time 
+                        FROM admin_sessions 
+                        ORDER BY login_time DESC 
+                        LIMIT 10
+                    ''')
+                    recent_logins = cur.fetchall()
+                    
+                    # Get recent validation attempts
+                    cur.execute('''
+                        SELECT license_key, hardware_id, status, ip_address, timestamp
+                        FROM validation_logs 
+                        ORDER BY timestamp DESC 
+                        LIMIT 20
+                    ''')
+                    recent_validations = cur.fetchall()
+                    
+            else:
+                cur = conn.cursor()
+                licenses = cur.execute('''
+                    SELECT license_key, customer_email, customer_name, created_date, 
+                           expiry_date, active, last_used, validation_count, hardware_id, created_by
+                    FROM licenses 
+                    ORDER BY created_date DESC
+                ''').fetchall()
+                
+                stats = cur.execute('''
+                    SELECT 
+                        COUNT(*) as total_licenses,
+                        COUNT(CASE WHEN active = 1 THEN 1 END) as active_licenses,
+                        COUNT(CASE WHEN datetime(expiry_date) > datetime('now') AND active = 1 THEN 1 END) as valid_licenses
+                    FROM licenses
+                ''').fetchone()
+                
+                recent_logins = cur.execute('''
+                    SELECT username, ip_address, login_time 
+                    FROM admin_sessions 
+                    ORDER BY login_time DESC 
+                    LIMIT 10
+                ''').fetchall()
+                
+                recent_validations = cur.execute('''
+                    SELECT license_key, hardware_id, status, ip_address, timestamp
+                    FROM validation_logs 
+                    ORDER BY timestamp DESC 
+                    LIMIT 20
+                ''').fetchall()
+    
+        return render_template_string(ADMIN_HTML, 
+                                    licenses=licenses, 
+                                    stats=stats, 
+                                    recent_logins=recent_logins,
+                                    recent_validations=recent_validations,
+                                    current_ip=request.remote_addr)
+    except Exception as e:
+        logger.error(f"Admin panel error: {e}")
+        return f"Admin panel error: {e}", 500
+
+@app.route('/admin/create_license', methods=['POST'])
+def create_license_endpoint():
+    """Create a new license from admin panel"""
+    auth = request.authorization
+    if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
+        return "Unauthorized", 401
+    
+    try:
+        customer_email = request.form.get('customer_email')
+        customer_name = request.form.get('customer_name', '')
+        duration_days = int(request.form.get('duration_days', 30))
+        
+        if not customer_email:
+            flash('Email is required', 'error')
+            return redirect('/admin')
+        
+        license_info = create_license(customer_email, customer_name, duration_days, f'admin:{auth.username}')
+        flash(f'License created successfully: {license_info["license_key"]}', 'success')
         
     except Exception as e:
-        logger.error({"error": str(e), "event": "Dashboard stats error"})
-        raise HTTPException(status_code=500, detail="Dashboard error")
+        flash(f'Error creating license: {e}', 'error')
+    
+    return redirect('/admin')
 
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_panel():
-    """Admin panel interface"""
-    return HTMLResponse(content="""<!DOCTYPE html>
-<html lang="en">
+@app.route('/admin/delete_license', methods=['POST'])
+def delete_license():
+    """Delete a license"""
+    auth = request.authorization
+    if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
+        return "Unauthorized", 401
+    
+    try:
+        license_key = request.form.get('license_key')
+        
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor() as cur:
+                    cur.execute('DELETE FROM licenses WHERE license_key = %s', (license_key,))
+            else:
+                cur = conn.cursor()
+                cur.execute('DELETE FROM licenses WHERE license_key = ?', (license_key,))
+            conn.commit()
+            
+        flash(f'License {license_key} deleted successfully', 'success')
+        
+    except Exception as e:
+        flash(f'Error deleting license: {e}', 'error')
+    
+    return redirect('/admin')
+
+@app.route('/admin/toggle_license', methods=['POST'])
+def toggle_license():
+    """Toggle license active status"""
+    auth = request.authorization
+    if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
+        return "Unauthorized", 401
+    
+    try:
+        license_key = request.form.get('license_key')
+        
+        with get_db_connection() as conn:
+            if DATABASE_URL:
+                with conn.cursor() as cur:
+                    cur.execute('UPDATE licenses SET active = NOT active WHERE license_key = %s', (license_key,))
+            else:
+                cur = conn.cursor()
+                cur.execute('UPDATE licenses SET active = NOT active WHERE license_key = ?', (license_key,))
+            conn.commit()
+            
+        flash(f'License {license_key} status toggled', 'success')
+        
+    except Exception as e:
+        flash(f'Error toggling license: {e}', 'error')
+    
+    return redirect('/admin')
+
+# =============================================================================
+# HTML TEMPLATES
+# =============================================================================
+
+INDEX_HTML = '''
+<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF License Server Admin</title>
+    <title>PDF License Server - Administration</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            color: #333; 
-            line-height: 1.6; 
-        }
-        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
-        .header { text-align: center; margin-bottom: 3rem; }
-        .header h1 { color: white; font-size: 3rem; margin-bottom: 0.5rem; text-shadow: 0 2px 4px rgba(0,0,0,0.3); }
-        .header p { color: rgba(255,255,255,0.9); font-size: 1.2rem; }
-        .login-box { 
-            background: white; 
-            padding: 3rem; 
-            border-radius: 15px; 
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            max-width: 450px;
-            margin: 0 auto;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 2rem;
-            margin: 2rem 0;
-        }
-        .stat-card {
-            background: white;
-            padding: 2rem;
-            border-radius: 15px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-            text-align: center;
-            transition: transform 0.3s ease;
-        }
-        .stat-card:hover { transform: translateY(-5px); }
-        .stat-card h3 { color: #667eea; font-size: 0.9rem; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 1px; }
-        .stat-card p { font-size: 3rem; font-weight: 700; color: #333; }
-        .form-group { margin-bottom: 1.5rem; }
-        label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #555; }
-        input[type="text"], input[type="password"] { 
-            width: 100%; 
-            padding: 1rem; 
-            border: 2px solid #e1e5e9; 
-            border-radius: 10px; 
-            font-size: 1rem;
-            transition: border-color 0.3s ease;
-        }
-        input[type="text"]:focus, input[type="password"]:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        button { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            border: none; 
-            padding: 1rem 2rem; 
-            border-radius: 10px; 
-            cursor: pointer; 
-            font-size: 1rem; 
-            font-weight: 600;
-            transition: transform 0.3s ease;
-        }
-        button:hover { transform: translateY(-2px); }
-        .btn-logout {
-            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
-            padding: 0.75rem 1.5rem;
-            font-size: 0.9rem;
-        }
-        .error-message { 
-            background: #ffe6e6; 
-            color: #d63031; 
-            padding: 1rem; 
-            border-radius: 10px; 
-            margin: 1rem 0;
-            border-left: 4px solid #d63031;
-        }
-        .dashboard { background: white; border-radius: 15px; padding: 2rem; margin-top: 2rem; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
-        .dashboard-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
-        .dashboard h2 { color: #333; font-size: 2rem; }
-        .activity-log { background: #f8f9fa; border-radius: 10px; padding: 1.5rem; margin-top: 2rem; }
-        .activity-item { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center;
-            padding: 0.75rem 0;
-            border-bottom: 1px solid #e9ecef;
-        }
-        .activity-item:last-child { border-bottom: none; }
-        .activity-action { font-weight: 600; color: #495057; }
-        .activity-time { color: #6c757d; font-size: 0.9rem; }
-        .status-badge {
-            padding: 0.25rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        .status-success { background: #d4edda; color: #155724; }
-        .status-failed { background: #f8d7da; color: #721c24; }
-        .hidden { display: none; }
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+        .header { text-align: center; background: #fff; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        .card { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin: 20px 0; }
+        .btn { background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; margin: 10px 5px; font-weight: bold; }
+        .btn:hover { background: #5a67d8; }
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .feature { background: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 4px solid #667eea; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔐 PDF License Server</h1>
+        <p style="font-size: 18px; color: #666;">Secure license management system with hardware binding</p>
+    </div>
+    
+    <div class="card">
+        <h2>Server Status</h2>
+        <p>✅ License server is running and ready to validate licenses</p>
+        <p>🔒 Hardware-locked licensing system active</p>
+        <p>📊 Real-time validation logging enabled</p>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <a href="/admin" class="btn">🛠️ Admin Panel</a>
+            <a href="/health" class="btn">💚 Health Check</a>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>🛡️ Security Features</h3>
+        <div class="features">
+            <div class="feature">
+                <strong>🔒 Hardware Binding</strong><br>
+                Each license is locked to a specific computer
+            </div>
+            <div class="feature">
+                <strong>📊 Real-time Monitoring</strong><br>
+                All validation attempts are logged with IP addresses
+            </div>
+            <div class="feature">
+                <strong>⏰ Expiration Control</strong><br>
+                Automatic license expiration and renewal system
+            </div>
+            <div class="feature">
+                <strong>👨‍💼 Admin Management</strong><br>
+                Complete license lifecycle management
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+ADMIN_HTML = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>License Administration Panel</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; background: white; border-radius: 10px; overflow: hidden; }
+        th, td { border: 1px solid #e1e5e9; padding: 12px; text-align: left; font-size: 14px; }
+        th { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }
+        .stat-box { background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%); padding: 25px; border-radius: 15px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .stat-number { font-size: 32px; font-weight: bold; color: #2d3748; margin-bottom: 5px; }
+        .stat-label { color: #4a5568; font-weight: bold; }
+        .expired { color: #e53e3e; font-weight: bold; }
+        .active { color: #38a169; font-weight: bold; }
+        .inactive { color: #718096; font-weight: bold; }
+        .license-key { font-family: 'Courier New', monospace; background: #f7fafc; padding: 5px 8px; border-radius: 5px; font-size: 12px; }
+        .form-group { margin: 15px 0; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+        .form-group input, .form-group select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
+        .btn { background: #667eea; color: white; padding: 8px 16px; border: none; border-radius: 5px; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; }
+        .btn-danger { background: #e53e3e; }
+        .btn-warning { background: #ed8936; }
+        .btn-success { background: #38a169; }
+        .btn:hover { opacity: 0.9; }
+        .flash { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .flash.success { background: #c6f6d5; color: #276749; }
+        .flash.error { background: #fed7d7; color: #9b2c2c; }
+        .create-form { background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; }
+        .tabs { display: flex; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; background: #e2e8f0; border: none; cursor: pointer; border-radius: 5px 5px 0 0; margin-right: 5px; }
+        .tab.active { background: #667eea; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🔐 PDF License Server</h1>
-            <p>Secure License Management & Distribution</p>
-        </div>
-
-        <!-- Login Page -->
-        <div id="loginPage">
-            <div class="login-box">
-                <form id="loginForm">
-                    <div class="form-group">
-                        <label for="username">Username</label>
-                        <input type="text" id="username" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="password">Password</label>
-                        <input type="password" id="password" required>
-                    </div>
-                    <button type="submit" style="width: 100%;">Login to Dashboard</button>
-                </form>
-                <div id="loginError" class="error-message hidden"></div>
+        <h1>🔐 License Administration Panel</h1>
+        <p><strong>Current Session IP:</strong> {{ current_ip }}</p>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.total_licenses }}</div>
+                <div class="stat-label">Total Licenses</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.active_licenses }}</div>
+                <div class="stat-label">Active Licenses</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.valid_licenses }}</div>
+                <div class="stat-label">Valid & Current</div>
             </div>
         </div>
         
-        <!-- Dashboard Page -->
-        <div id="dashboardPage" class="hidden">
-            <div class="dashboard">
-                <div class="dashboard-header">
-                    <h2>License Management Dashboard</h2>
-                    <button onclick="logout()" class="btn-logout">Logout</button>
-                </div>
-                
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <h3>Total Licenses</h3>
-                        <p id="totalLicenses">0</p>
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('licenses')">📋 Licenses</button>
+            <button class="tab" onclick="showTab('create')">➕ Create License</button>
+            <button class="tab" onclick="showTab('logs')">📊 Activity Logs</button>
+            <button class="tab" onclick="showTab('admin-logs')">👨‍💼 Admin Access</button>
+        </div>
+        
+        <!-- Licenses Tab -->
+        <div id="licenses" class="tab-content active">
+            <h2>📋 All Licenses</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>License Key</th>
+                        <th>Customer</th>
+                        <th>Email</th>
+                        <th>Created</th>
+                        <th>Expires</th>
+                        <th>Status</th>
+                        <th>Hardware ID</th>
+                        <th>Usage</th>
+                        <th>Created By</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for license in licenses %}
+                    <tr>
+                        <td><span class="license-key">{{ license.license_key }}</span></td>
+                        <td>{{ license.customer_name or 'N/A' }}</td>
+                        <td>{{ license.customer_email }}</td>
+                        <td>{{ license.created_date[:10] if license.created_date else 'N/A' }}</td>
+                        <td>{{ license.expiry_date[:10] if license.expiry_date else 'N/A' }}</td>
+                        <td>
+                            {% if license.active %}
+                                <span class="active">● Active</span>
+                            {% else %}
+                                <span class="inactive">● Inactive</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if license.hardware_id %}
+                                <code style="font-size: 10px;">{{ license.hardware_id[:16] }}...</code>
+                            {% else %}
+                                <span style="color: #999;">Unbound</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <small>
+                                Count: {{ license.validation_count or 0 }}<br>
+                                Last: {{ license.last_used[:10] if license.last_used else 'Never' }}
+                            </small>
+                        </td>
+                        <td><small>{{ license.created_by or 'system' }}</small></td>
+                        <td>
+                            <form method="POST" style="display: inline;">
+                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                <button type="submit" formaction="/admin/toggle_license" class="btn btn-warning" 
+                                        onclick="return confirm('Toggle license status?')">
+                                    {% if license.active %}Disable{% else %}Enable{% endif %}
+                                </button>
+                                <button type="submit" formaction="/admin/delete_license" class="btn btn-danger" 
+                                        onclick="return confirm('Delete this license permanently?')">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Create License Tab -->
+        <div id="create" class="tab-content">
+            <h2>➕ Create New License</h2>
+            <div class="create-form">
+                <form method="POST" action="/admin/create_license">
+                    <div class="form-group">
+                        <label for="customer_email">📧 Customer Email *</label>
+                        <input type="email" id="customer_email" name="customer_email" required>
                     </div>
-                    <div class="stat-card">
-                        <h3>Active Licenses</h3>
-                        <p id="activeLicenses">0</p>
+                    
+                    <div class="form-group">
+                        <label for="customer_name">👤 Customer Name</label>
+                        <input type="text" id="customer_name" name="customer_name">
                     </div>
-                    <div class="stat-card">
-                        <h3>Valid Licenses</h3>
-                        <p id="validLicenses">0</p>
+                    
+                    <div class="form-group">
+                        <label for="duration_days">⏰ Duration (Days)</label>
+                        <select id="duration_days" name="duration_days">
+                            <option value="7">7 days (Trial)</option>
+                            <option value="30" selected>30 days (Monthly)</option>
+                            <option value="90">90 days (Quarterly)</option>
+                            <option value="365">365 days (Annual)</option>
+                        </select>
                     </div>
-                    <div class="stat-card">
-                        <h3>Total Downloads</h3>
-                        <p id="totalDownloads">0</p>
-                    </div>
-                </div>
-                
-                <div class="activity-log">
-                    <h3>Recent Activity</h3>
-                    <div id="activityList">
-                        <div class="activity-item">
-                            <span class="activity-action">Loading...</span>
-                            <span class="activity-time">Please wait</span>
-                        </div>
-                    </div>
-                </div>
+                    
+                    <button type="submit" class="btn btn-success">🚀 Create License</button>
+                </form>
             </div>
         </div>
+        
+        <!-- Activity Logs Tab -->
+        <div id="logs" class="tab-content">
+            <h2>📊 Recent Validation Activity</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>License Key</th>
+                        <th>Hardware ID</th>
+                        <th>Status</th>
+                        <th>IP Address</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in recent_validations %}
+                    <tr>
+                        <td>{{ log.timestamp[:19] if log.timestamp else 'N/A' }}</td>
+                        <td><span class="license-key">{{ log.license_key[:20] if log.license_key else 'N/A' }}...</span></td>
+                        <td><code style="font-size: 10px;">{{ log.hardware_id[:16] if log.hardware_id else 'N/A' }}...</code></td>
+                        <td>
+                            {% if log.status == 'VALID' %}
+                                <span class="active">✅ {{ log.status }}</span>
+                            {% elif log.status == 'EXPIRED' %}
+                                <span class="expired">⏰ {{ log.status }}</span>
+                            {% elif log.status == 'HARDWARE_MISMATCH' %}
+                                <span class="expired">🔒 {{ log.status }}</span>
+                            {% else %}
+                                <span class="inactive">❌ {{ log.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ log.ip_address or 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Admin Logs Tab -->
+        <div id="admin-logs" class="tab-content">
+            <h2>👨‍💼 Recent Admin Access</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Username</th>
+                        <th>IP Address</th>
+                        <th>Login Time</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for login in recent_logins %}
+                    <tr>
+                        <td><strong>{{ login.username }}</strong></td>
+                        <td>{{ login.ip_address }}</td>
+                        <td>{{ login.login_time[:19] if login.login_time else 'N/A' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <p style="margin-top: 30px;"><a href="/" style="color: #667eea; text-decoration: none; font-weight: bold;">← Back to Home</a></p>
     </div>
     
     <script>
-        let authToken = localStorage.getItem('adminToken');
-        
-        // Check if already logged in
-        if (authToken) {
-            showDashboard();
-        }
-        
-        // Login form handler
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        function showTab(tabName) {
+            // Hide all tab contents
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
             
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
+            // Hide all tab buttons
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
             
-            try {
-                const response = await fetch('/api/admin/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    authToken = data.access_token;
-                    localStorage.setItem('adminToken', authToken);
-                    showDashboard();
-                } else {
-                    const error = await response.json();
-                    showError(error.detail || 'Login failed');
-                }
-            } catch (error) {
-                showError('Network error - please try again');
-            }
-        });
-        
-        async function showDashboard() {
-            document.getElementById('loginPage').classList.add('hidden');
-            document.getElementById('dashboardPage').classList.remove('hidden');
-            await loadDashboard();
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
             
-            // Refresh dashboard every 30 seconds
-            setInterval(loadDashboard, 30000);
-        }
-        
-        async function loadDashboard() {
-            try {
-                const response = await fetch('/api/admin/dashboard', {
-                    headers: { 'Authorization': `Bearer ${authToken}` }
-                });
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    // Update statistics
-                    document.getElementById('totalLicenses').textContent = data.total_licenses || 0;
-                    document.getElementById('activeLicenses').textContent = data.active_licenses || 0;
-                    document.getElementById('validLicenses').textContent = data.valid_licenses || 0;
-                    document.getElementById('totalDownloads').textContent = data.total_downloads || 0;
-                    
-                    // Update activity log
-                    const activityList = document.getElementById('activityList');
-                    if (data.recent_activity && data.recent_activity.length > 0) {
-                        activityList.innerHTML = data.recent_activity.map(activity => {
-                            const time = new Date(activity.timestamp).toLocaleString();
-                            const statusClass = activity.status === 'SUCCESS' ? 'status-success' : 'status-failed';
-                            
-                            return `
-                                <div class="activity-item">
-                                    <div>
-                                        <span class="activity-action">${activity.action}</span>
-                                        <span class="status-badge ${statusClass}">${activity.status}</span>
-                                        ${activity.license_key ? `<br><small>License: ${activity.license_key}</small>` : ''}
-                                    </div>
-                                    <span class="activity-time">${time}</span>
-                                </div>
-                            `;
-                        }).join('');
-                    } else {
-                        activityList.innerHTML = '<div class="activity-item"><span class="activity-action">No recent activity</span></div>';
-                    }
-                    
-                } else if (response.status === 401) {
-                    logout();
-                } else {
-                    console.error('Dashboard load failed');
-                }
-            } catch (error) {
-                console.error('Dashboard load error:', error);
-            }
-        }
-        
-        function showError(message) {
-            const errorElement = document.getElementById('loginError');
-            errorElement.textContent = message;
-            errorElement.classList.remove('hidden');
-            
-            setTimeout(() => {
-                errorElement.classList.add('hidden');
-            }, 5000);
-        }
-        
-        function logout() {
-            localStorage.removeItem('adminToken');
-            authToken = null;
-            document.getElementById('loginPage').classList.remove('hidden');
-            document.getElementById('dashboardPage').classList.add('hidden');
+            // Highlight selected tab button
+            event.target.classList.add('active');
         }
     </script>
 </body>
-</html>""")
+</html>
+'''
 
 # =============================================================================
-# MAIN ENTRY POINT
+# MAIN APPLICATION
 # =============================================================================
 
-if __name__ == "__main__":
-    logger.info(f"Starting {config.APP_NAME} v{config.APP_VERSION} on {config.HOST}:{config.PORT}")
-    logger.info(f"Admin credentials: {config.ADMIN_USERNAME} / {config.ADMIN_PASSWORD}")
-    logger.info(f"Environment: {'Render' if config.IS_RENDER else 'Local'}")
-    
-    uvicorn.run(
-        "app:app",
-        host=config.HOST,
-        port=config.PORT,
-        reload=False,
-        log_level="info"
-    )
+if __name__ == '__main__':
+    init_db()
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
