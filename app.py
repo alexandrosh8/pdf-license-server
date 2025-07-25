@@ -45,12 +45,20 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 def get_db_connection():
-    """Get database connection - PostgreSQL for Render, SQLite for local"""
-    if DATABASE_URL:
-        # PostgreSQL for Render
-        return psycopg2.connect(DATABASE_URL)
+    """Get database connection - PostgreSQL for Render, SQLite for local/fallback"""
+    if DATABASE_URL and PSYCOPG2_AVAILABLE:
+        try:
+            # Try PostgreSQL first
+            return psycopg2.connect(DATABASE_URL)
+        except Exception as e:
+            logger.error(f"PostgreSQL connection failed: {e}, falling back to SQLite")
+            # Fall back to SQLite on any PostgreSQL error
+            import sqlite3
+            conn = sqlite3.connect('licenses.db')
+            conn.row_factory = sqlite3.Row
+            return conn
     else:
-        # SQLite for local development
+        # SQLite for local development or when psycopg2 not available
         import sqlite3
         conn = sqlite3.connect('licenses.db')
         conn.row_factory = sqlite3.Row
@@ -60,7 +68,7 @@ def init_db():
     """Initialize the license database with proper schema"""
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 # PostgreSQL schema
                 with conn.cursor() as cur:
                     cur.execute('''
@@ -109,8 +117,10 @@ def init_db():
                     cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
                     cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_timestamp ON validation_logs(timestamp)')
                     
+                logger.info("PostgreSQL database initialized successfully")
+                    
             else:
-                # SQLite schema for local development
+                # SQLite schema for local development or fallback
                 cur = conn.cursor()
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS licenses (
@@ -153,8 +163,9 @@ def init_db():
                     )
                 ''')
                 
+                logger.info("SQLite database initialized successfully")
+                
             conn.commit()
-            logger.info("Database initialized successfully")
             
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
@@ -176,7 +187,7 @@ def log_validation(license_key, hardware_id, status, ip_address, user_agent=None
     """Log validation attempt"""
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO validation_logs (license_key, hardware_id, status, ip_address, user_agent, details)
@@ -199,7 +210,7 @@ def log_admin_session(username, ip_address):
     try:
         session_id = secrets.token_urlsafe(32)
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO admin_sessions (session_id, username, ip_address)
@@ -225,7 +236,7 @@ def create_license(customer_email, customer_name=None, duration_days=30, created
     
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO licenses (license_key, customer_email, customer_name, 
@@ -279,7 +290,7 @@ def validate_license():
             }), 400
         
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         'SELECT * FROM licenses WHERE license_key = %s AND active = true',
@@ -301,7 +312,7 @@ def validate_license():
                 }), 400
             
             # Check expiration
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 expiry_date = license_row['expiry_date']
                 current_date = datetime.now(expiry_date.tzinfo if expiry_date.tzinfo else None)
             else:
@@ -322,7 +333,7 @@ def validate_license():
             
             if not stored_hardware_id:
                 # First time binding - bind to this hardware
-                if DATABASE_URL:
+                if DATABASE_URL and PSYCOPG2_AVAILABLE:
                     with conn.cursor() as cur:
                         cur.execute(
                             'UPDATE licenses SET hardware_id = %s, last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
@@ -347,7 +358,7 @@ def validate_license():
                 }), 400
             else:
                 # Valid hardware - update last used
-                if DATABASE_URL:
+                if DATABASE_URL and PSYCOPG2_AVAILABLE:
                     with conn.cursor() as cur:
                         cur.execute(
                             'UPDATE licenses SET last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
@@ -388,23 +399,28 @@ def health_check():
     try:
         # Test database connection
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 with conn.cursor() as cur:
                     cur.execute('SELECT 1')
+                db_type = "PostgreSQL"
             else:
                 cur = conn.cursor()
                 cur.execute('SELECT 1')
+                db_type = "SQLite"
         
         return jsonify({
             "status": "healthy",
             "version": "2.2.0",
             "timestamp": datetime.now().isoformat(),
-            "database": "connected"
+            "database": db_type,
+            "psycopg2_available": PSYCOPG2_AVAILABLE
         })
     except Exception as e:
         return jsonify({
             "status": "unhealthy",
-            "error": str(e)
+            "error": str(e),
+            "database": "disconnected",
+            "psycopg2_available": PSYCOPG2_AVAILABLE
         }), 503
 
 # =============================================================================
@@ -442,7 +458,7 @@ def admin():
     
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     # Get all licenses
                     cur.execute('''
