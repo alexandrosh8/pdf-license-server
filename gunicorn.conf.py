@@ -1,13 +1,12 @@
 import os
-import multiprocessing
 
 # Server socket
-bind = f"0.0.0.0:{os.getenv('PORT', '8000')}"
+bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
 backlog = 2048
 
 # Worker processes - conservative for free tier
 workers = 1
-worker_class = "uvicorn.workers.UvicornWorker"
+worker_class = "sync"  # Changed from uvicorn.workers.UvicornWorker to sync for Flask
 worker_connections = 1000
 
 # Timeouts optimized for Render
@@ -19,11 +18,10 @@ graceful_timeout = 30
 max_requests = 1000
 max_requests_jitter = 100
 
-# Logging - JSON format for better parsing
+# Logging
 accesslog = "-"
 errorlog = "-"
 loglevel = "info"
-access_log_format = '{"time": "%(t)s", "method": "%(m)s", "url": "%(U)s", "status": %(s)s, "bytes": %(b)s, "duration": %(D)s, "ip": "%(h)s", "user_agent": "%(a)s"}'
 
 # Process naming
 proc_name = "pdf_license_server"
@@ -42,9 +40,6 @@ limit_request_field_size = 8190
 # Signal handling
 forwarded_allow_ips = "*"
 proxy_allow_ips = "*"
-
-# Enable worker recycling to prevent memory leaks
-max_worker_memory = 200  # MB
 
 def when_ready(server):
     server.log.info("PDF License Server ready to accept connections")
