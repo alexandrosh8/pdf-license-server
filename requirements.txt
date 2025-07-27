@@ -1,68 +1,73 @@
-# Core Flask framework
-Flask==3.0.0
+# PDF License Server v6.1.0 - Enhanced Professional Edition
+# Requirements for Flask 3.0+ with GitHub Integration and Auto-Deploy
 
-# WSGI server for production deployment on Render
-gunicorn==21.2.0
+# Core Framework
+Flask>=3.0.0
+Werkzeug>=3.0.0
+Jinja2>=3.1.0
+itsdangerous>=2.1.0
+click>=8.1.0
 
-# PostgreSQL adapter for Python - required for Render's PostgreSQL
-psycopg2-binary==2.9.9
+# Database Support
+psycopg2-binary>=2.9.7          # PostgreSQL adapter for production
+psycopg2>=2.9.7                 # Alternative PostgreSQL adapter
 
-# Environment variable management
-python-dotenv==1.0.0
+# HTTP Client for GitHub Integration
+requests>=2.31.0                # GitHub API communication
+urllib3>=2.0.0                   # HTTP library
 
-# Enhanced logging with colors for better development experience
-colorlog==6.8.0
+# Async HTTP for Client Auto-Updates
+aiohttp>=3.9.0                  # Async HTTP client/server
+aiofiles>=23.2.0                # Async file operations
 
-# Core Flask dependencies (specified for version consistency)
-Werkzeug==3.1.3
-Jinja2==3.1.6
-MarkupSafe==3.0.2
-itsdangerous==2.2.0
-click==8.2.1
-blinker==1.9.0
+# Security and Cryptography
+cryptography>=41.0.0            # Encryption and secure token generation
+bcrypt>=4.0.0                   # Password hashing (if needed)
 
-# Packaging utilities
-packaging==25.0
+# Utilities
+python-dotenv>=1.0.0            # Environment variable management
+pathlib>=1.0.0                  # Path manipulation (Python 3.4+)
 
-# Additional useful packages for production
-# Timezone handling (helpful for PostgreSQL timestamps)
-pytz==2023.3
+# Date and Time
+python-dateutil>=2.8.0         # Enhanced date parsing
 
-# Request handling and HTTP utilities
-requests==2.31.0
-urllib3==2.1.0
+# JSON and Data Processing
+ujson>=5.8.0                    # Fast JSON processing (optional optimization)
 
-# Security enhancements
-cryptography==41.0.7
+# Production Server Support
+gunicorn>=21.2.0                # WSGI HTTP Server for production
+eventlet>=0.33.0                # Concurrent networking library
 
-# JSON handling improvements
-simplejson==3.19.2
+# Development and Testing (Optional)
+pytest>=7.4.0                  # Testing framework
+pytest-asyncio>=0.21.0         # Async testing support
+pytest-cov>=4.1.0              # Coverage reporting
 
-# Development and debugging tools (optional, can be removed for production)
-# Uncomment these for enhanced debugging capabilities:
-# flask-debugtoolbar==0.14.1
-# flask-profiler==1.8.1
+# Monitoring and Logging
+structlog>=23.2.0               # Structured logging (optional)
 
-# Health check and monitoring utilities
-# psutil==5.9.6  # Uncomment for system monitoring capabilities
+# File Upload Support
+python-magic>=0.4.27           # File type detection
+pillow>=10.0.0                  # Image processing (for icons)
 
-# Email utilities (if you plan to add email notifications)
-# flask-mail==0.9.1
+# PDF Processing Dependencies (for client)
+# Note: These are included for completeness but may not be needed on server
+# pikepdf>=8.0.0                # PDF manipulation
+# PyMuPDF>=1.23.0              # PDF processing alternative
 
-# Caching support (if you plan to add Redis caching)
-# redis==5.0.1
-# flask-caching==2.1.0
+# Windows-specific dependencies (for PyInstaller)
+# pywin32>=306                  # Windows API access (Windows only)
+# pyinstaller>=6.0.0           # Executable building
 
-# API documentation (if you plan to add Swagger/OpenAPI docs)
-# flask-restx==1.3.0
-# flasgger==0.9.7.1
+# Optional Performance Optimizations
+# redis>=5.0.0                 # Caching layer
+# celery>=5.3.0                # Task queue for background jobs
 
-# Rate limiting (for API protection)
-# flask-limiter==3.5.0
+# Development Tools (Optional)
+# black>=23.0.0                # Code formatting
+# flake8>=6.0.0                # Code linting
+# mypy>=1.5.0                  # Type checking
 
-# CORS support (if you need cross-origin requests)
-# flask-cors==4.0.0
-
-# Background task processing (if you plan to add async tasks)
-# celery==5.3.4
-# redis==5.0.1  # Required for Celery broker
+# Note: Some packages may have platform-specific requirements
+# Install with: pip install -r requirements.txt
+# For production: pip install -r requirements.txt --no-dev
