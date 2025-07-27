@@ -1,16 +1,28 @@
-# Core Flask dependencies
+# Core Flask framework
 Flask==3.0.0
+
+# WSGI server for production
 gunicorn==21.2.0
 
-# Database dependencies
+# PostgreSQL adapter for Python
+# This is required for connecting to Render's PostgreSQL database
 psycopg2-binary==2.9.9
-# Note: psycopg2-binary is used instead of psycopg2 for easier deployment
 
-# Security
+# Environment variable management
 python-dotenv==1.0.0
 
-# Optional: For better logging
+# Enhanced logging with colors (optional but nice to have)
 colorlog==6.8.0
 
-# Additional dependencies for production
+# Werkzeug (Flask dependency, but we specify version for consistency)
 werkzeug==3.1.3
+
+# Additional dependencies that Flask requires
+Jinja2==3.1.6
+MarkupSafe==3.0.2
+itsdangerous==2.2.0
+click==8.2.1
+blinker==1.9.0
+
+# Package management
+packaging==25.0
