@@ -281,24 +281,25 @@ def init_database():
                 pass
 
 # =============================================================================
-# STARTUP INITIALIZATION (CONDITIONAL)
+# STARTUP INITIALIZATION (FREE TIER COMPATIBLE)
 # =============================================================================
 
 def initialize_database_on_startup():
-    """Initialize database only if not running under gunicorn"""
-    # Don't run initialization during Render's build process or when imported
-    if os.environ.get('RENDER_SERVICE_ID') and 'gunicorn' not in sys.argv[0]:
-        logger.info("Skipping database initialization during build process")
-        return
-    
-    # Only initialize if we're the main process
-    if __name__ == '__main__':
-        try:
-            init_database()
-            logger.info("Database initialization completed successfully")
-        except Exception as e:
-            logger.error(f"Database initialization failed: {e}")
-            # Don't crash the app during startup issues
+    """Initialize database on startup - works with free tier"""
+    try:
+        # Always try to initialize database on startup for free tier compatibility
+        logger.info("Initializing database on application startup...")
+        init_database()
+        logger.info("Database initialization completed successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        # Continue anyway - app might still work if database exists
+        return False
+
+# Initialize database when the module is loaded (free tier compatible)
+logger.info("Starting PDF License Server v5.1.0 (Free Tier Compatible)")
+initialize_database_on_startup()
 
 # =============================================================================
 # UTILITY FUNCTIONS
