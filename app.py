@@ -103,12 +103,16 @@ def init_database():
         if is_postgresql():
             # PostgreSQL schema with improved transaction handling
             logger.info("Initializing PostgreSQL database...")
+            
+            # Use autocommit mode for DDL operations
+            conn.autocommit = True
             cur = conn.cursor()
             
             try:
-                # Create tables in a single transaction
+                # Create tables one by one with explicit verification
                 logger.info("Creating database tables...")
                 
+                # Create licenses table
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS licenses (
                         id SERIAL PRIMARY KEY,
@@ -125,7 +129,9 @@ def init_database():
                         created_by VARCHAR(255) DEFAULT 'system'
                     )
                 ''')
+                logger.info("Created licenses table")
                 
+                # Create validation_logs table
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS validation_logs (
                         id SERIAL PRIMARY KEY,
@@ -138,7 +144,9 @@ def init_database():
                         details JSONB
                     )
                 ''')
+                logger.info("Created validation_logs table")
                 
+                # Create admin_sessions table
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS admin_sessions (
                         id SERIAL PRIMARY KEY,
@@ -149,12 +157,21 @@ def init_database():
                         last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                     )
                 ''')
+                logger.info("Created admin_sessions table")
                 
-                # Commit table creation
-                conn.commit()
-                logger.info("Database tables created successfully")
+                # Verify tables exist by checking their structure
+                for table_name in ['licenses', 'validation_logs', 'admin_sessions']:
+                    cur.execute("""
+                        SELECT column_name FROM information_schema.columns 
+                        WHERE table_name = %s AND table_schema = 'public'
+                        ORDER BY ordinal_position
+                    """, (table_name,))
+                    columns = [row[0] for row in cur.fetchall()]
+                    logger.info(f"Table {table_name} columns: {columns}")
                 
-                # Create indexes in separate transactions (more resilient)
+                logger.info("Database tables created and verified successfully")
+                
+                # Create indexes with better error handling
                 indexes_to_create = [
                     ('idx_licenses_key', 'licenses', 'license_key'),
                     ('idx_licenses_email', 'licenses', 'customer_email'),
@@ -167,33 +184,35 @@ def init_database():
                 
                 for index_name, table_name, column_name in indexes_to_create:
                     try:
-                        # Check if index exists first
+                        # Verify column exists first
                         cur.execute("""
-                            SELECT 1 FROM pg_indexes 
-                            WHERE schemaname = 'public' 
-                            AND tablename = %s 
-                            AND indexname = %s
-                        """, (table_name, index_name))
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = %s AND column_name = %s AND table_schema = 'public'
+                        """, (table_name, column_name))
                         
-                        if not cur.fetchone():
-                            cur.execute(sql.SQL('CREATE INDEX IF NOT EXISTS {} ON {} ({})').format(
-                                sql.Identifier(index_name),
-                                sql.Identifier(table_name),
-                                sql.Identifier(column_name)
-                            ))
-                            conn.commit()
-                            logger.info(f"Created index {index_name}")
+                        if cur.fetchone():
+                            # Check if index exists
+                            cur.execute("""
+                                SELECT 1 FROM pg_indexes 
+                                WHERE schemaname = 'public' 
+                                AND tablename = %s 
+                                AND indexname = %s
+                            """, (table_name, index_name))
+                            
+                            if not cur.fetchone():
+                                cur.execute(f'CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({column_name})')
+                                logger.info(f"Created index {index_name}")
+                            else:
+                                logger.info(f"Index {index_name} already exists")
                         else:
-                            logger.info(f"Index {index_name} already exists")
+                            logger.warning(f"Column {column_name} does not exist in table {table_name}")
                     except Exception as e:
                         logger.warning(f"Could not create index {index_name}: {e}")
-                        conn.rollback()
                         # Continue with other indexes
                 
                 logger.info("PostgreSQL database initialized successfully")
                 
             except Exception as e:
-                conn.rollback()
                 logger.error(f"Error during PostgreSQL initialization: {e}")
                 raise
             finally:
@@ -269,7 +288,8 @@ def init_database():
         logger.exception("Full traceback:")
         if conn:
             try:
-                conn.rollback()
+                if hasattr(conn, 'rollback'):
+                    conn.rollback()
             except:
                 pass
         raise
@@ -578,18 +598,31 @@ def health_check():
         cur = conn.cursor()
         
         if is_postgresql():
-            cur.execute('SELECT 1')
+            cur.execute('SELECT 1 as test')
             result = cur.fetchone()
             db_type = "PostgreSQL"
             
-            # Additional PostgreSQL health checks
-            cur.execute('SELECT version()')
-            db_version = cur.fetchone()[0] if cur.fetchone() else "Unknown"
+            # Get PostgreSQL version safely
+            try:
+                cur.execute('SELECT version()')
+                version_result = cur.fetchone()
+                db_version = version_result[0] if version_result else "Unknown"
+            except Exception as e:
+                logger.warning(f"Could not get PostgreSQL version: {e}")
+                db_version = "Unknown"
         else:
-            cur.execute('SELECT 1')
+            cur.execute('SELECT 1 as test')
             result = cur.fetchone()
             db_type = "SQLite"
-            db_version = "N/A"
+            
+            # Get SQLite version safely
+            try:
+                cur.execute('SELECT sqlite_version()')
+                version_result = cur.fetchone()
+                db_version = version_result[0] if version_result else "Unknown"
+            except Exception as e:
+                logger.warning(f"Could not get SQLite version: {e}")
+                db_version = "Unknown"
         
         cur.close()
         conn.close()
@@ -617,6 +650,7 @@ def health_check():
         })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
+        logger.exception("Health check error details:")
         return jsonify({
             "status": "unhealthy",
             "error": str(e),
