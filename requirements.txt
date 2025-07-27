@@ -1,28 +1,68 @@
 # Core Flask framework
 Flask==3.0.0
 
-# WSGI server for production
+# WSGI server for production deployment on Render
 gunicorn==21.2.0
 
-# PostgreSQL adapter for Python
-# This is required for connecting to Render's PostgreSQL database
+# PostgreSQL adapter for Python - required for Render's PostgreSQL
 psycopg2-binary==2.9.9
 
 # Environment variable management
 python-dotenv==1.0.0
 
-# Enhanced logging with colors (optional but nice to have)
+# Enhanced logging with colors for better development experience
 colorlog==6.8.0
 
-# Werkzeug (Flask dependency, but we specify version for consistency)
-werkzeug==3.1.3
-
-# Additional dependencies that Flask requires
+# Core Flask dependencies (specified for version consistency)
+Werkzeug==3.1.3
 Jinja2==3.1.6
 MarkupSafe==3.0.2
 itsdangerous==2.2.0
 click==8.2.1
 blinker==1.9.0
 
-# Package management
+# Packaging utilities
 packaging==25.0
+
+# Additional useful packages for production
+# Timezone handling (helpful for PostgreSQL timestamps)
+pytz==2023.3
+
+# Request handling and HTTP utilities
+requests==2.31.0
+urllib3==2.1.0
+
+# Security enhancements
+cryptography==41.0.7
+
+# JSON handling improvements
+simplejson==3.19.2
+
+# Development and debugging tools (optional, can be removed for production)
+# Uncomment these for enhanced debugging capabilities:
+# flask-debugtoolbar==0.14.1
+# flask-profiler==1.8.1
+
+# Health check and monitoring utilities
+# psutil==5.9.6  # Uncomment for system monitoring capabilities
+
+# Email utilities (if you plan to add email notifications)
+# flask-mail==0.9.1
+
+# Caching support (if you plan to add Redis caching)
+# redis==5.0.1
+# flask-caching==2.1.0
+
+# API documentation (if you plan to add Swagger/OpenAPI docs)
+# flask-restx==1.3.0
+# flasgger==0.9.7.1
+
+# Rate limiting (for API protection)
+# flask-limiter==3.5.0
+
+# CORS support (if you need cross-origin requests)
+# flask-cors==4.0.0
+
+# Background task processing (if you plan to add async tasks)
+# celery==5.3.4
+# redis==5.0.1  # Required for Celery broker
