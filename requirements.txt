@@ -1,4 +1,13 @@
+# Core Flask dependencies
 Flask==3.0.0
 gunicorn==21.2.0
+
+# Database dependencies
 psycopg2-binary==2.9.9
-Werkzeug==3.0.1
+# Note: psycopg2-binary is used instead of psycopg2 for easier deployment
+
+# Security
+python-dotenv==1.0.0
+
+# Optional: For better logging
+colorlog==6.8.0
