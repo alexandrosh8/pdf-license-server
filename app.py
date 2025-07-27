@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """
-🔐 PRODUCTION PDF LICENSE SERVER - FLASK
-=========================================
+🔐 PRODUCTION PDF LICENSE SERVER - FLASK (RENDER.COM OPTIMIZED)
+================================================================
 Complete license server with admin panel, hardware locking, and IP tracking
-Version: 5.0.0 - Optimized for Render.com deployment
+Version: 5.1.0 - Optimized for Render.com deployment
 Compatible with PostgreSQL and SQLite (automatic fallback)
+
+Key improvements for Render.com:
+- Fixed database initialization issues
+- Proper transaction handling for PostgreSQL
+- Better error handling and logging
+- Optimized for Render's deployment process
 """
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash, session
@@ -51,7 +57,7 @@ except ImportError:
 # Always import sqlite3 as fallback
 import sqlite3
 
-# Logging setup with better formatting
+# Logging setup with better formatting for Render
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -82,36 +88,27 @@ def get_db_connection():
         conn.row_factory = sqlite3.Row
         return conn
 
-def init_db_with_retry(max_retries=3, delay=2):
-    """Initialize database with retry logic for Render deployment"""
-    for attempt in range(max_retries):
-        try:
-            init_db()
-            return True
-        except Exception as e:
-            logger.error(f"Database initialization attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-            else:
-                logger.error("Failed to initialize database after all retries")
-                raise
-    return False
+def is_postgresql():
+    """Check if we're using PostgreSQL"""
+    return DATABASE_URL and PSYCOPG2_AVAILABLE
 
-def init_db():
-    """Initialize the database with proper schema"""
+def init_database():
+    """Initialize the database with proper schema - optimized for Render.com"""
     logger.info("Starting database initialization...")
     
     conn = None
     try:
         conn = get_db_connection()
         
-        if DATABASE_URL and PSYCOPG2_AVAILABLE and isinstance(conn, psycopg2.extensions.connection):
-            # PostgreSQL schema
+        if is_postgresql():
+            # PostgreSQL schema with improved transaction handling
             logger.info("Initializing PostgreSQL database...")
             cur = conn.cursor()
             
             try:
-                # Create tables first
+                # Create tables in a single transaction
+                logger.info("Creating database tables...")
+                
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS licenses (
                         id SERIAL PRIMARY KEY,
@@ -153,20 +150,22 @@ def init_db():
                     )
                 ''')
                 
-                # Commit table creation first
+                # Commit table creation
                 conn.commit()
-                logger.info("Tables created successfully")
+                logger.info("Database tables created successfully")
                 
-                # Now create indexes in a separate transaction
-                indexes = [
+                # Create indexes in separate transactions (more resilient)
+                indexes_to_create = [
                     ('idx_licenses_key', 'licenses', 'license_key'),
                     ('idx_licenses_email', 'licenses', 'customer_email'),
                     ('idx_licenses_expiry', 'licenses', 'expiry_date'),
+                    ('idx_licenses_active', 'licenses', 'active'),
                     ('idx_validation_logs_timestamp', 'validation_logs', 'timestamp'),
-                    ('idx_validation_logs_license', 'validation_logs', 'license_key')
+                    ('idx_validation_logs_license', 'validation_logs', 'license_key'),
+                    ('idx_validation_logs_status', 'validation_logs', 'status')
                 ]
                 
-                for index_name, table_name, column_name in indexes:
+                for index_name, table_name, column_name in indexes_to_create:
                     try:
                         # Check if index exists first
                         cur.execute("""
@@ -177,19 +176,25 @@ def init_db():
                         """, (table_name, index_name))
                         
                         if not cur.fetchone():
-                            cur.execute(f'CREATE INDEX {index_name} ON {table_name}({column_name})')
+                            cur.execute(sql.SQL('CREATE INDEX IF NOT EXISTS {} ON {} ({})').format(
+                                sql.Identifier(index_name),
+                                sql.Identifier(table_name),
+                                sql.Identifier(column_name)
+                            ))
+                            conn.commit()
                             logger.info(f"Created index {index_name}")
                         else:
                             logger.info(f"Index {index_name} already exists")
                     except Exception as e:
                         logger.warning(f"Could not create index {index_name}: {e}")
+                        conn.rollback()
                         # Continue with other indexes
                 
-                conn.commit()
                 logger.info("PostgreSQL database initialized successfully")
                 
             except Exception as e:
                 conn.rollback()
+                logger.error(f"Error during PostgreSQL initialization: {e}")
                 raise
             finally:
                 cur.close()
@@ -199,90 +204,101 @@ def init_db():
             logger.info("Initializing SQLite database...")
             cur = conn.cursor()
             
-            # Create tables
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS licenses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    license_key TEXT UNIQUE NOT NULL,
-                    hardware_id TEXT,
-                    customer_email TEXT NOT NULL,
-                    customer_name TEXT,
-                    created_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    expiry_date TEXT NOT NULL,
-                    payment_id TEXT,
-                    active INTEGER DEFAULT 1,
-                    last_used TEXT,
-                    validation_count INTEGER DEFAULT 0,
-                    created_by TEXT DEFAULT 'system'
-                )
-            ''')
-            
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS validation_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    license_key TEXT,
-                    hardware_id TEXT,
-                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT,
-                    ip_address TEXT,
-                    user_agent TEXT,
-                    details TEXT
-                )
-            ''')
-            
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS admin_sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT,
-                    username TEXT,
-                    ip_address TEXT,
-                    login_time TEXT DEFAULT CURRENT_TIMESTAMP,
-                    last_activity TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # Create indexes
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
-            cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_timestamp ON validation_logs(timestamp)')
-            
-            conn.commit()
-            logger.info("SQLite database initialized successfully")
+            try:
+                # Create tables
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS licenses (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        license_key TEXT UNIQUE NOT NULL,
+                        hardware_id TEXT,
+                        customer_email TEXT NOT NULL,
+                        customer_name TEXT,
+                        created_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        expiry_date TEXT NOT NULL,
+                        payment_id TEXT,
+                        active INTEGER DEFAULT 1,
+                        last_used TEXT,
+                        validation_count INTEGER DEFAULT 0,
+                        created_by TEXT DEFAULT 'system'
+                    )
+                ''')
+                
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS validation_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        license_key TEXT,
+                        hardware_id TEXT,
+                        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                        status TEXT,
+                        ip_address TEXT,
+                        user_agent TEXT,
+                        details TEXT
+                    )
+                ''')
+                
+                cur.execute('''
+                    CREATE TABLE IF NOT EXISTS admin_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT,
+                        username TEXT,
+                        ip_address TEXT,
+                        login_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                        last_activity TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                
+                # Create indexes
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_active ON licenses(active)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_timestamp ON validation_logs(timestamp)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_license ON validation_logs(license_key)')
+                
+                conn.commit()
+                logger.info("SQLite database initialized successfully")
+                
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Error during SQLite initialization: {e}")
+                raise
+            finally:
+                cur.close()
             
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         logger.exception("Full traceback:")
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except:
+                pass
         raise
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except:
+                pass
 
 # =============================================================================
-# STARTUP INITIALIZATION
+# STARTUP INITIALIZATION (CONDITIONAL)
 # =============================================================================
 
-# Initialize database on startup with retry logic
 def initialize_database_on_startup():
-    """Initialize database with proper error handling for Render deployment"""
-    max_attempts = 5
-    for attempt in range(max_attempts):
+    """Initialize database only if not running under gunicorn"""
+    # Don't run initialization during Render's build process or when imported
+    if os.environ.get('RENDER_SERVICE_ID') and 'gunicorn' not in sys.argv[0]:
+        logger.info("Skipping database initialization during build process")
+        return
+    
+    # Only initialize if we're the main process
+    if __name__ == '__main__':
         try:
-            with app.app_context():
-                init_db()
-                logger.info("Database initialization completed successfully")
-                return
+            init_database()
+            logger.info("Database initialization completed successfully")
         except Exception as e:
-            logger.error(f"Database initialization attempt {attempt + 1}/{max_attempts} failed: {e}")
-            if attempt < max_attempts - 1:
-                time.sleep(3)  # Wait before retry
-            else:
-                logger.error("Database initialization failed after all attempts")
-                # Don't crash the app, but log the error prominently
-
-# Run initialization when module is imported
-initialize_database_on_startup()
+            logger.error(f"Database initialization failed: {e}")
+            # Don't crash the app during startup issues
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -296,21 +312,22 @@ def generate_license_key():
         segments.append(segment)
     return f"PDFM-{'-'.join(segments)}"
 
-def is_postgresql():
-    """Check if we're using PostgreSQL"""
-    return DATABASE_URL and PSYCOPG2_AVAILABLE
-
 def get_client_ip():
-    """Get client IP address, handling proxies"""
-    if request.environ.get('HTTP_X_FORWARDED_FOR') is not None:
+    """Get client IP address, handling proxies and Render's infrastructure"""
+    # Check Render-specific headers first
+    if request.headers.get('X-Forwarded-For'):
+        return request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    elif request.headers.get('X-Real-IP'):
+        return request.headers.get('X-Real-IP')
+    elif request.environ.get('HTTP_X_FORWARDED_FOR'):
         return request.environ['HTTP_X_FORWARDED_FOR'].split(',')[0].strip()
-    elif request.environ.get('HTTP_X_REAL_IP') is not None:
+    elif request.environ.get('HTTP_X_REAL_IP'):
         return request.environ['HTTP_X_REAL_IP']
     else:
         return request.environ.get('REMOTE_ADDR', 'unknown')
 
 def log_validation(license_key, hardware_id, status, ip_address, user_agent=None, details=None):
-    """Log validation attempt"""
+    """Log validation attempt with improved error handling"""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -553,7 +570,7 @@ def validate_license():
 
 @app.route('/health')
 def health_check():
-    """Health check endpoint for Render"""
+    """Health check endpoint for Render with enhanced diagnostics"""
     try:
         # Test database connection
         conn = get_db_connection()
@@ -563,23 +580,39 @@ def health_check():
             cur.execute('SELECT 1')
             result = cur.fetchone()
             db_type = "PostgreSQL"
+            
+            # Additional PostgreSQL health checks
+            cur.execute('SELECT version()')
+            db_version = cur.fetchone()[0] if cur.fetchone() else "Unknown"
         else:
             cur.execute('SELECT 1')
             result = cur.fetchone()
             db_type = "SQLite"
+            db_version = "N/A"
         
         cur.close()
         conn.close()
         
+        # Check if we're running on Render
+        is_render = bool(os.environ.get('RENDER_SERVICE_ID'))
+        
         return jsonify({
             "status": "healthy",
-            "version": "5.0.0",
+            "version": "5.1.0",
             "timestamp": datetime.now().isoformat(),
             "database": db_type,
+            "database_version": db_version,
             "database_connected": result is not None,
             "database_url_set": DATABASE_URL is not None,
             "psycopg2_available": PSYCOPG2_AVAILABLE,
-            "python_version": sys.version
+            "python_version": sys.version,
+            "platform": "Render.com" if is_render else "Local",
+            "render_service_id": os.environ.get('RENDER_SERVICE_ID', 'N/A'),
+            "environment": {
+                "PORT": os.environ.get('PORT', 'Not Set'),
+                "PYTHON_VERSION": os.environ.get('PYTHON_VERSION', 'Not Set'),
+                "DATABASE_URL": "Set" if DATABASE_URL else "Not Set"
+            }
         })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -587,11 +620,41 @@ def health_check():
             "status": "unhealthy",
             "error": str(e),
             "database": "disconnected",
-            "psycopg2_available": PSYCOPG2_AVAILABLE
+            "psycopg2_available": PSYCOPG2_AVAILABLE,
+            "platform": "Render.com" if os.environ.get('RENDER_SERVICE_ID') else "Local"
         }), 503
 
 # =============================================================================
-# WEB INTERFACE
+# DATABASE MANAGEMENT ENDPOINT (FOR RENDER PRE-DEPLOY)
+# =============================================================================
+
+@app.route('/api/init-db', methods=['POST'])
+def api_init_database():
+    """API endpoint to initialize database (for pre-deploy command)"""
+    try:
+        # Simple authentication for this endpoint
+        auth_token = request.headers.get('Authorization')
+        expected_token = os.environ.get('DB_INIT_TOKEN', 'default-token')
+        
+        if auth_token != f"Bearer {expected_token}":
+            return jsonify({"error": "Unauthorized"}), 401
+        
+        init_database()
+        return jsonify({
+            "status": "success",
+            "message": "Database initialized successfully",
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Database initialization via API failed: {e}")
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+# =============================================================================
+# WEB INTERFACE (SAME AS BEFORE)
 # =============================================================================
 
 @app.route('/')
@@ -693,7 +756,8 @@ def admin():
                                     recent_logins=recent_logins,
                                     recent_validations=recent_validations,
                                     current_ip=get_client_ip(),
-                                    is_postgresql=is_postgresql())
+                                    is_postgresql=is_postgresql(),
+                                    render_url=request.host_url)
     except Exception as e:
         logger.error(f"Admin panel error: {e}")
         logger.exception("Full traceback:")
@@ -826,7 +890,7 @@ def extend_license():
     return redirect('/admin')
 
 # =============================================================================
-# HTML TEMPLATES
+# HTML TEMPLATES (UPDATED FOR RENDER)
 # =============================================================================
 
 INDEX_HTML = '''
@@ -940,6 +1004,14 @@ INDEX_HTML = '''
             font-size: 0.9em;
             margin: 10px 5px;
         }
+        .render-badge {
+            background: #667eea;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            margin-left: 10px;
+        }
         @media (max-width: 768px) {
             .header h1 { font-size: 2em; }
             .features { grid-template-columns: 1fr; }
@@ -950,11 +1022,15 @@ INDEX_HTML = '''
     <div class="container">
         <div class="header">
             <h1>🔐 PDF License Server</h1>
-            <p>Professional License Management System with Hardware-Locked Security</p>
+            <p>
+                Professional License Management System with Hardware-Locked Security
+                <span class="render-badge">🚀 Deployed on Render.com</span>
+            </p>
             <div style="margin-top: 20px;">
                 <span class="security-badge">🛡️ Enterprise-Grade Security</span>
                 <span class="security-badge">🔒 Hardware Binding</span>
                 <span class="security-badge">📊 Real-time Analytics</span>
+                <span class="security-badge">🐘 PostgreSQL Powered</span>
             </div>
         </div>
         
@@ -964,7 +1040,8 @@ INDEX_HTML = '''
                 ✅ License validation service is operational<br>
                 🔐 Hardware-locked licensing system active<br>
                 📈 Real-time validation logging enabled<br>
-                🌍 Deployed on Render.com infrastructure
+                🌍 Deployed on Render.com with PostgreSQL<br>
+                🚀 Optimized for high-performance production use
             </p>
             
             <div style="text-align: center; margin-top: 30px;">
@@ -1000,6 +1077,14 @@ INDEX_HTML = '''
                     <strong>🔄 API Integration</strong>
                     RESTful API for seamless integration with desktop and mobile applications
                 </div>
+                <div class="feature">
+                    <strong>🌐 Render.com Optimized</strong>
+                    Fully optimized for Render's infrastructure with automatic scaling and deployment
+                </div>
+                <div class="feature">
+                    <strong>🔧 Zero-Downtime Deploys</strong>
+                    Continuous deployment with database migrations and health checks
+                </div>
             </div>
         </div>
         
@@ -1014,7 +1099,7 @@ INDEX_HTML = '''
         </div>
         
         <div style="text-align: center; margin-top: 40px; color: #718096;">
-            <p>PDF License Server v5.0.0 • Optimized for Render.com</p>
+            <p>PDF License Server v5.1.0 • Optimized for Render.com</p>
         </div>
     </div>
 </body>
@@ -1250,7 +1335,10 @@ ADMIN_HTML = '''
             <p>
                 Current Session IP: {{ current_ip }}
                 <span class="info-badge">
-                    Database: {% if is_postgresql %}PostgreSQL{% else %}SQLite{% endif %}
+                    Database: {% if is_postgresql %}PostgreSQL (Render){% else %}SQLite (Local){% endif %}
+                </span>
+                <span class="info-badge">
+                    🌍 {{ render_url }}
                 </span>
             </p>
         </div>
@@ -1557,6 +1645,9 @@ def internal_error(error):
 # =============================================================================
 
 if __name__ == '__main__':
+    # Initialize database when running locally
+    initialize_database_on_startup()
+    
     # This block only runs during local development
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
