@@ -3,7 +3,7 @@
 🔐 PRODUCTION PDF LICENSE SERVER - FLASK
 =========================================
 Complete license server with admin panel, hardware locking, and IP tracking
-Version: 4.1.0 - Fixed for Render.com deployment
+Version: 5.0.0 - Optimized for Render.com deployment
 Compatible with PostgreSQL and SQLite (automatic fallback)
 """
 
@@ -18,6 +18,7 @@ import logging
 from contextlib import contextmanager
 from functools import wraps
 import sys
+import time
 
 # =============================================================================
 # APP CONFIGURATION
@@ -81,6 +82,21 @@ def get_db_connection():
         conn.row_factory = sqlite3.Row
         return conn
 
+def init_db_with_retry(max_retries=3, delay=2):
+    """Initialize database with retry logic for Render deployment"""
+    for attempt in range(max_retries):
+        try:
+            init_db()
+            return True
+        except Exception as e:
+            logger.error(f"Database initialization attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                logger.error("Failed to initialize database after all retries")
+                raise
+    return False
+
 def init_db():
     """Initialize the database with proper schema"""
     logger.info("Starting database initialization...")
@@ -95,7 +111,7 @@ def init_db():
             cur = conn.cursor()
             
             try:
-                # Create licenses table
+                # Create tables first
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS licenses (
                         id SERIAL PRIMARY KEY,
@@ -113,7 +129,6 @@ def init_db():
                     )
                 ''')
                 
-                # Create validation_logs table
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS validation_logs (
                         id SERIAL PRIMARY KEY,
@@ -127,7 +142,6 @@ def init_db():
                     )
                 ''')
                 
-                # Create admin_sessions table
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS admin_sessions (
                         id SERIAL PRIMARY KEY,
@@ -139,11 +153,11 @@ def init_db():
                     )
                 ''')
                 
-                # Commit the table creation
+                # Commit table creation first
                 conn.commit()
                 logger.info("Tables created successfully")
                 
-                # Create indexes for better performance
+                # Now create indexes in a separate transaction
                 indexes = [
                     ('idx_licenses_key', 'licenses', 'license_key'),
                     ('idx_licenses_email', 'licenses', 'customer_email'),
@@ -154,14 +168,29 @@ def init_db():
                 
                 for index_name, table_name, column_name in indexes:
                     try:
-                        cur.execute(f'CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({column_name})')
-                        logger.info(f"Created index {index_name}")
+                        # Check if index exists first
+                        cur.execute("""
+                            SELECT 1 FROM pg_indexes 
+                            WHERE schemaname = 'public' 
+                            AND tablename = %s 
+                            AND indexname = %s
+                        """, (table_name, index_name))
+                        
+                        if not cur.fetchone():
+                            cur.execute(f'CREATE INDEX {index_name} ON {table_name}({column_name})')
+                            logger.info(f"Created index {index_name}")
+                        else:
+                            logger.info(f"Index {index_name} already exists")
                     except Exception as e:
-                        logger.warning(f"Index {index_name} may already exist: {e}")
+                        logger.warning(f"Could not create index {index_name}: {e}")
+                        # Continue with other indexes
                 
                 conn.commit()
                 logger.info("PostgreSQL database initialized successfully")
                 
+            except Exception as e:
+                conn.rollback()
+                raise
             finally:
                 cur.close()
                     
@@ -234,15 +263,26 @@ def init_db():
 # STARTUP INITIALIZATION
 # =============================================================================
 
-# Initialize database on startup (works with gunicorn)
-with app.app_context():
-    try:
-        init_db()
-        logger.info("Database initialization completed on startup")
-    except Exception as e:
-        logger.error(f"Failed to initialize database on startup: {e}")
-        # Don't crash the app, but log the error
-        pass
+# Initialize database on startup with retry logic
+def initialize_database_on_startup():
+    """Initialize database with proper error handling for Render deployment"""
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            with app.app_context():
+                init_db()
+                logger.info("Database initialization completed successfully")
+                return
+        except Exception as e:
+            logger.error(f"Database initialization attempt {attempt + 1}/{max_attempts} failed: {e}")
+            if attempt < max_attempts - 1:
+                time.sleep(3)  # Wait before retry
+            else:
+                logger.error("Database initialization failed after all attempts")
+                # Don't crash the app, but log the error prominently
+
+# Run initialization when module is imported
+initialize_database_on_startup()
 
 # =============================================================================
 # UTILITY FUNCTIONS
@@ -533,7 +573,7 @@ def health_check():
         
         return jsonify({
             "status": "healthy",
-            "version": "4.1.0",
+            "version": "5.0.0",
             "timestamp": datetime.now().isoformat(),
             "database": db_type,
             "database_connected": result is not None,
@@ -974,7 +1014,7 @@ INDEX_HTML = '''
         </div>
         
         <div style="text-align: center; margin-top: 40px; color: #718096;">
-            <p>PDF License Server v4.1.0 • Optimized for Render.com</p>
+            <p>PDF License Server v5.0.0 • Optimized for Render.com</p>
         </div>
     </div>
 </body>
