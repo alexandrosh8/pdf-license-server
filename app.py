@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-🔐 PRODUCTION PDF LICENSE SERVER - FLASK 3.0+ ULTIMATE EDITION (RENDER.COM OPTIMIZED)
-====================================================================================
+🔐 PRODUCTION PDF LICENSE SERVER - FLASK 3.0+ ULTIMATE EDITION (RENDER.COM OPTIMIZED) - FIXED VERSION
+=====================================================================================================
 Complete license server with admin panel, hardware locking, IP tracking, and AUTO-REPAIR functionality
 Version: 5.4.0 - Flask 3.0+ Ultimate Edition with Jinja2 Template Fixes for Render.com
 Compatible with PostgreSQL and SQLite (automatic fallback with intelligent repair)
@@ -12,6 +12,7 @@ Compatible with PostgreSQL and SQLite (automatic fallback with intelligent repai
 - Professional datetime formatting filters
 - Enhanced error handling and logging
 - Full Flask 3.0+ compatibility with modern best practices
+- FIXED: Full license key and hardware ID display
 """
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash, session
@@ -121,6 +122,24 @@ def format_datetime_full(value, format='%Y-%m-%d %H:%M:%S'):
     except Exception as e:
         logger.warning(f"Error formatting datetime {value}: {e}")
         return str(value) if value else "-"
+
+@app.template_filter('truncate_license')
+def truncate_license(license_key, length=12):
+    """Truncate license key for display but keep it readable"""
+    if not license_key:
+        return "-"
+    if len(license_key) <= length:
+        return license_key
+    return license_key[:length] + "..."
+
+@app.template_filter('truncate_hardware')  
+def truncate_hardware(hardware_id, length=16):
+    """Truncate hardware ID for display but keep it readable"""
+    if not hardware_id:
+        return "-"
+    if len(hardware_id) <= length:
+        return hardware_id
+    return hardware_id[:length] + "..."
 
 # Make Python built-ins available in templates for professional compatibility
 app.jinja_env.globals.update({
@@ -1015,7 +1034,7 @@ def index():
 @app.route('/admin')
 @require_auth
 def admin():
-    """Enhanced admin panel with auto-repair diagnostics and Jinja2 template fixes"""
+    """Enhanced admin panel with auto-repair diagnostics and Jinja2 template fixes - FIXED DISPLAY VERSION"""
     # Log admin access
     log_admin_session(request.authorization.username, get_client_ip())
     
@@ -1294,7 +1313,7 @@ def extend_license():
     return redirect('/admin')
 
 # =============================================================================
-# ULTIMATE HTML TEMPLATES WITH JINJA2 FIXES
+# ULTIMATE HTML TEMPLATES WITH JINJA2 FIXES - FULL DISPLAY VERSION
 # =============================================================================
 
 INDEX_HTML = '''
@@ -1480,7 +1499,7 @@ INDEX_HTML = '''
         <div class="header">
             <h1>🔐 PDF License Server</h1>
             <p>
-                Flask 3.0+ Ultimate Edition with Professional Jinja2 Template Engine
+                Flask 3.0+ Ultimate Edition with Professional Jinja2 Template Engine - FIXED DISPLAY VERSION
                 <span class="render-badge">🚀 Render.com</span>
                 <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
             </p>
@@ -1489,6 +1508,7 @@ INDEX_HTML = '''
                 <span class="security-badge">🔒 Hardware Binding</span>
                 <span class="security-badge">📊 Real-time Analytics</span>
                 <span class="security-badge">🔧 Ultimate Auto-Repair</span>
+                <span class="security-badge">📱 Full Display Fixed</span>
             </div>
         </div>
         
@@ -1513,7 +1533,8 @@ INDEX_HTML = '''
                 🌍 Auto-deployed on Render.com with PostgreSQL<br>
                 🚀 Optimized for high-performance production use<br>
                 🔧 Intelligent self-healing database system<br>
-                ⚡ Modern Flask 3.0+ Ultimate architecture with Jinja2 template fixes
+                ⚡ Modern Flask 3.0+ Ultimate architecture with Jinja2 template fixes<br>
+                📱 FIXED: Complete license key and hardware ID display
             </p>
             
             <div style="text-align: center; margin-top: 35px;">
@@ -1534,12 +1555,16 @@ INDEX_HTML = '''
                     Professional template engine with resolved hasattr errors and enhanced datetime formatting
                 </div>
                 <div class="feature">
+                    <strong>📱 Full Display Fixed</strong>
+                    Complete license keys and hardware IDs are now properly displayed in admin panel
+                </div>
+                <div class="feature">
                     <strong>🔒 Hardware Binding</strong>
                     Cryptographically locked licenses prevent unauthorized sharing with military-grade security
                 </div>
                 <div class="feature">
-                    <strong>📊 Real-time Analytics</strong>
-                    Complete validation tracking with IP addresses, timestamps, and detailed forensic logging
+                    <strong>📧 Contact Integration</strong>
+                    Seamless email contact system replacing generic server URLs
                 </div>
                 <div class="feature">
                     <strong>🔧 Ultimate Auto-Repair</strong>
@@ -1548,10 +1573,6 @@ INDEX_HTML = '''
                 <div class="feature">
                     <strong>⏰ Flexible Licensing</strong>
                     Support for trial, monthly, quarterly, and annual licenses with automatic expiration
-                </div>
-                <div class="feature">
-                    <strong>👨‍💼 Professional Admin</strong>
-                    Complete license lifecycle management with modern Flask 3.0+ admin interface
                 </div>
                 <div class="feature">
                     <strong>🌐 Render.com Optimized</strong>
@@ -1571,8 +1592,8 @@ INDEX_HTML = '''
         </div>
         
         <div class="version-info">
-            <p><strong>PDF License Server v5.4.0 - Flask 3.0+ Ultimate Edition with Jinja2 Template Fixes</strong></p>
-            <p>Optimized for Render.com • Flask 3.0+ Ultimate Architecture • Professional Jinja2 Engine • Self-Healing Database System</p>
+            <p><strong>PDF License Server v5.4.0 - Flask 3.0+ Ultimate Edition with FIXED DISPLAY</strong></p>
+            <p>Optimized for Render.com • Flask 3.0+ Ultimate Architecture • Professional Jinja2 Engine • Self-Healing Database System • Complete UI Display Fixed</p>
         </div>
     </div>
 </body>
@@ -1680,7 +1701,7 @@ REPAIR_HTML = '''
     <div class="container">
         <div class="header">
             <h1>🔧 Database Auto-Repair System</h1>
-            <p>Flask 3.0+ Ultimate Edition Professional Database Recovery & Initialization
+            <p>Flask 3.0+ Ultimate Edition Professional Database Recovery & Initialization - FIXED DISPLAY VERSION
                 <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
             </p>
         </div>
@@ -1698,7 +1719,7 @@ REPAIR_HTML = '''
             <h3 style="margin-bottom: 20px;">📊 Flask 3.0+ Ultimate Database Diagnostic Report</h3>
             
             <div class="status-info">
-                <p><strong>Flask Version:</strong> 3.0+ Ultimate Compatible</p>
+                <p><strong>Flask Version:</strong> 3.0+ Ultimate Compatible - FIXED DISPLAY</p>
                 <p><strong>Initialization Attempts:</strong> {{ initialization_attempts }}</p>
                 <p><strong>Your IP:</strong> {{ current_ip }}</p>
                 <p><strong>Database Type:</strong> {{ db_status.type }}</p>
@@ -1751,7 +1772,8 @@ REPAIR_HTML = '''
             <h3 style="margin-bottom: 20px;">🛠️ Flask 3.0+ Ultimate Repair Actions</h3>
             <p style="margin-bottom: 20px; line-height: 1.6;">
                 The Flask 3.0+ Ultimate compatible auto-repair system will completely rebuild the database schema with all required tables, 
-                indexes, and sample data. This is a safe operation that will not affect existing valid data.
+                indexes, and sample data. This is a safe operation that will not affect existing valid data. 
+                <strong>FIXED DISPLAY VERSION</strong> ensures complete license key and hardware ID visibility.
             </p>
             
             <form method="POST" action="/admin/repair-database" style="text-align: center;">
@@ -1774,7 +1796,7 @@ ADMIN_HTML = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>License Administration Dashboard - Flask 3.0+ Ultimate Edition</title>
+    <title>License Administration Dashboard - Flask 3.0+ Ultimate Edition - FIXED DISPLAY</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1864,6 +1886,7 @@ ADMIN_HTML = '''
             padding: 12px; 
             text-align: left; 
             border-bottom: 1px solid #e2e8f0;
+            word-wrap: break-word;
         }
         th { 
             background: #f8f9fa;
@@ -1880,6 +1903,44 @@ ADMIN_HTML = '''
             padding: 4px 8px; 
             border-radius: 4px; 
             font-size: 0.85em;
+            font-weight: bold;
+            color: #2d3748;
+            cursor: pointer;
+            position: relative;
+            max-width: 200px;
+            word-break: break-all;
+        }
+        
+        .hardware-id {
+            font-family: 'Courier New', monospace;
+            background: #e6fffa;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            color: #234e52;
+            cursor: pointer;
+            max-width: 150px;
+            word-break: break-all;
+        }
+        
+        .full-display {
+            position: absolute;
+            background: #2d3748;
+            color: white;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            z-index: 1000;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            display: none;
+            top: 100%;
+            left: 0;
+            white-space: nowrap;
+        }
+        
+        .license-key:hover .full-display,
+        .hardware-id:hover .full-display {
+            display: block;
         }
         
         .status-badge {
@@ -2010,6 +2071,15 @@ ADMIN_HTML = '''
             margin-left: 10px;
         }
         
+        .fixed-badge {
+            background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85em;
+            margin-left: 10px;
+        }
+        
         .action-buttons {
             display: flex;
             gap: 5px;
@@ -2030,11 +2100,12 @@ ADMIN_HTML = '''
         <div class="header">
             <h1>🔐 License Administration Dashboard</h1>
             <p>
-                Flask 3.0+ Ultimate Edition Professional Auto-Repair Edition • Current Session IP: {{ current_ip }}
+                Flask 3.0+ Ultimate Edition Professional Auto-Repair Edition - FIXED DISPLAY VERSION • Current Session IP: {{ current_ip }}
                 <span class="info-badge">
                     Database: {% if is_postgresql %}PostgreSQL (Render){% else %}SQLite (Local){% endif %}
                 </span>
                 <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
+                <span class="fixed-badge">📱 Full Display Fixed</span>
                 <span class="info-badge">
                     🌍 {{ render_url }}
                 </span>
@@ -2045,7 +2116,7 @@ ADMIN_HTML = '''
             <div>
                 <strong>🔧 Flask 3.0+ Ultimate Auto-Repair Status:</strong> 
                 {% if database_initialized %}
-                    ✅ Database Operational ({{ initialization_attempts }} attempts)
+                    ✅ Database Operational ({{ initialization_attempts }} attempts) - FIXED DISPLAY ACTIVE
                 {% else %}
                     ⚠️ Database Needs Repair ({{ initialization_attempts }} attempts)
                 {% endif %}
@@ -2093,23 +2164,24 @@ ADMIN_HTML = '''
         <div id="licenses" class="tab-content active">
             <div class="card">
                 <div class="card-header">
-                    📋 License Management
+                    📋 License Management - FIXED DISPLAY VERSION
                     <div>
                         <span class="info-badge">Total: {{ licenses|length }}</span>
                         <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
+                        <span class="fixed-badge">📱 Full Display</span>
                     </div>
                 </div>
                 <div class="card-body" style="overflow-x: auto;">
                     <table>
                         <thead>
                             <tr>
-                                <th>License Key</th>
+                                <th>License Key (Full)</th>
                                 <th>Customer</th>
                                 <th>Email</th>
                                 <th>Created</th>
                                 <th>Expires</th>
                                 <th>Status</th>
-                                <th>Hardware</th>
+                                <th>Hardware ID (Full)</th>
                                 <th>Usage</th>
                                 <th>Actions</th>
                             </tr>
@@ -2117,7 +2189,12 @@ ADMIN_HTML = '''
                         <tbody>
                             {% for license in licenses %}
                             <tr>
-                                <td><span class="license-key">{{ license.license_key }}</span></td>
+                                <td>
+                                    <div class="license-key" style="position: relative;">
+                                        {{ license.license_key }}
+                                        <div class="full-display">{{ license.license_key }}</div>
+                                    </div>
+                                </td>
                                 <td>{{ license.customer_name or '-' }}</td>
                                 <td>{{ license.customer_email }}</td>
                                 <td>{{ license.created_date|formatdatetime }}</td>
@@ -2131,9 +2208,10 @@ ADMIN_HTML = '''
                                 </td>
                                 <td>
                                     {% if license.hardware_id %}
-                                        <span title="{{ license.hardware_id }}" style="cursor: help;">
-                                            🖥️ Bound
-                                        </span>
+                                        <div class="hardware-id" style="position: relative;">
+                                            {{ license.hardware_id }}
+                                            <div class="full-display">{{ license.hardware_id }}</div>
+                                        </div>
                                     {% else %}
                                         <span style="color: #999;">Unbound</span>
                                     {% endif %}
@@ -2216,14 +2294,14 @@ ADMIN_HTML = '''
         <!-- Activity Logs Tab -->
         <div id="logs" class="tab-content">
             <div class="card">
-                <div class="card-header">📊 Recent Validation Activity</div>
+                <div class="card-header">📊 Recent Validation Activity - FIXED DISPLAY</div>
                 <div class="card-body" style="overflow-x: auto;">
                     <table>
                         <thead>
                             <tr>
                                 <th>Time</th>
-                                <th>License Key</th>
-                                <th>Hardware ID</th>
+                                <th>License Key (Full)</th>
+                                <th>Hardware ID (Full)</th>
                                 <th>Status</th>
                                 <th>IP Address</th>
                             </tr>
@@ -2234,18 +2312,20 @@ ADMIN_HTML = '''
                                 <td>{{ log.timestamp|formatdatetimefull }}</td>
                                 <td>
                                     {% if log.license_key %}
-                                        <span class="license-key" title="{{ log.license_key }}">
-                                            {{ log.license_key[:12] }}...
-                                        </span>
+                                        <div class="license-key" style="position: relative;">
+                                            {{ log.license_key }}
+                                            <div class="full-display">{{ log.license_key }}</div>
+                                        </div>
                                     {% else %}
                                         -
                                     {% endif %}
                                 </td>
                                 <td>
                                     {% if log.hardware_id %}
-                                        <span title="{{ log.hardware_id }}" style="cursor: help;">
-                                            {{ log.hardware_id[:16] }}...
-                                        </span>
+                                        <div class="hardware-id" style="position: relative;">
+                                            {{ log.hardware_id }}
+                                            <div class="full-display">{{ log.hardware_id }}</div>
+                                        </div>
                                     {% else %}
                                         -
                                     {% endif %}
@@ -2303,7 +2383,7 @@ ADMIN_HTML = '''
         <div id="diagnostics" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    🔧 Flask 3.0+ Ultimate System Diagnostics
+                    🔧 Flask 3.0+ Ultimate System Diagnostics - FIXED DISPLAY VERSION
                     <a href="/health" class="btn btn-success">📊 Full Health Report</a>
                 </div>
                 <div class="card-body">
@@ -2333,6 +2413,7 @@ ADMIN_HTML = '''
                             <p><strong>Attempts:</strong> {{ initialization_attempts }}</p>
                             <p><strong>Platform:</strong> Render.com</p>
                             <p><strong>Flask:</strong> 3.0+ Ultimate Compatible</p>
+                            <p><strong>Display:</strong> <span class="status-badge active">Fixed</span></p>
                         </div>
                     </div>
                     
