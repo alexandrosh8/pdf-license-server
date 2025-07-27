@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-🔐 PRODUCTION PDF LICENSE SERVER - FLASK (RENDER.COM OPTIMIZED WITH AUTO-REPAIR)
-================================================================================
+🔐 PRODUCTION PDF LICENSE SERVER - FLASK 3.0+ COMPATIBLE (RENDER.COM OPTIMIZED)
+=================================================================================
 Complete license server with admin panel, hardware locking, IP tracking, and AUTO-REPAIR functionality
-Version: 5.2.0 - Professional Auto-Repair Edition for Render.com deployment
+Version: 5.3.0 - Flask 3.0+ Compatible Professional Auto-Repair Edition for Render.com
 Compatible with PostgreSQL and SQLite (automatic fallback with intelligent repair)
 
-🚀 KEY IMPROVEMENTS FOR RENDER.COM:
-- Auto-repair database initialization with before_first_request
-- Intelligent table detection and creation
-- Emergency repair button in admin panel
-- Comprehensive error handling and logging
-- Multiple initialization strategies for maximum reliability
-- Professional-grade self-healing database system
+🚀 FLASK 3.0+ COMPATIBILITY:
+- Replaced deprecated @app.before_first_request with modern approach
+- Uses @app.before_request with flag for one-time initialization
+- Application context initialization for startup database setup
+- Full compatibility with Flask 3.0.0+ and latest dependencies
 """
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash, session
@@ -70,10 +68,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global flag to track database initialization status
+# Global flag to track database initialization status - FLASK 3.0+ COMPATIBLE
 DATABASE_INITIALIZED = False
 INITIALIZATION_ATTEMPTS = 0
 MAX_INITIALIZATION_ATTEMPTS = 3
+FIRST_REQUEST_HANDLED = False
 
 # =============================================================================
 # PROFESSIONAL DATABASE FUNCTIONS WITH AUTO-REPAIR
@@ -460,30 +459,34 @@ def init_database():
     return force_init_database()
 
 # =============================================================================
-# PROFESSIONAL AUTO-REPAIR SYSTEM
+# FLASK 3.0+ COMPATIBLE AUTO-REPAIR SYSTEM
 # =============================================================================
 
-@app.before_first_request
+@app.before_request
 def initialize_database_before_first_request():
     """
-    🚀 PROFESSIONAL DATABASE AUTO-INITIALIZATION
-    This runs before the very first request to ensure database is ready
+    🚀 FLASK 3.0+ COMPATIBLE DATABASE AUTO-INITIALIZATION
+    This runs before each request but only initializes once using a flag
+    Replaces the deprecated @app.before_first_request decorator
     """
-    global DATABASE_INITIALIZED
+    global DATABASE_INITIALIZED, FIRST_REQUEST_HANDLED
     
-    logger.info("🔧 AUTO-REPAIR: Before first request database initialization triggered")
-    
-    if not DATABASE_INITIALIZED:
-        logger.info("🔄 Database not initialized, attempting auto-repair...")
-        success = force_init_database()
+    # Only run once, on the first request
+    if not FIRST_REQUEST_HANDLED:
+        FIRST_REQUEST_HANDLED = True
+        logger.info("🔧 FLASK 3.0+ AUTO-REPAIR: Before first request database initialization triggered")
         
-        if success:
-            logger.info("✅ AUTO-REPAIR: Database successfully initialized before first request!")
+        if not DATABASE_INITIALIZED:
+            logger.info("🔄 Database not initialized, attempting auto-repair...")
+            success = force_init_database()
+            
+            if success:
+                logger.info("✅ FLASK 3.0+ AUTO-REPAIR: Database successfully initialized before first request!")
+            else:
+                logger.error("❌ FLASK 3.0+ AUTO-REPAIR: Database initialization failed before first request!")
+                # Continue anyway - app might work with degraded functionality
         else:
-            logger.error("❌ AUTO-REPAIR: Database initialization failed before first request!")
-            # Continue anyway - app might work with degraded functionality
-    else:
-        logger.info("✅ Database already initialized, skipping auto-repair")
+            logger.info("✅ Database already initialized, skipping auto-repair")
 
 def ensure_database_ready():
     """Ensure database is ready with intelligent checking"""
@@ -508,22 +511,23 @@ def ensure_database_ready():
         return True
 
 # =============================================================================
-# STARTUP INITIALIZATION (ENHANCED FOR RENDER.COM)
+# STARTUP INITIALIZATION (ENHANCED FOR RENDER.COM + FLASK 3.0+)
 # =============================================================================
 
 def initialize_database_on_startup():
-    """Initialize database on startup - professional edition with multi-strategy approach"""
+    """Initialize database on startup - Flask 3.0+ edition with multi-strategy approach"""
     global DATABASE_INITIALIZED
     
-    logger.info("🚀 PDF License Server v5.2.0 - Professional Auto-Repair Edition Starting...")
-    logger.info("🔧 Multi-strategy database initialization for Render.com...")
+    logger.info("🚀 PDF License Server v5.3.0 - Flask 3.0+ Compatible Professional Auto-Repair Edition Starting...")
+    logger.info("🔧 Multi-strategy database initialization for Render.com + Flask 3.0+...")
     
-    # Strategy 1: Try immediate initialization
+    # Strategy 1: Try immediate initialization with app context
     try:
-        logger.info("📡 Strategy 1: Immediate database initialization...")
-        if force_init_database():
-            logger.info("✅ Strategy 1: SUCCESS - Database initialized immediately")
-            return True
+        logger.info("📡 Strategy 1: Immediate database initialization with app context...")
+        with app.app_context():
+            if force_init_database():
+                logger.info("✅ Strategy 1: SUCCESS - Database initialized immediately with app context")
+                return True
     except Exception as e:
         logger.warning(f"⚠️ Strategy 1: Failed - {e}")
     
@@ -531,19 +535,17 @@ def initialize_database_on_startup():
     try:
         logger.info("⏰ Strategy 2: Delayed initialization (3 second wait)...")
         time.sleep(3)
-        if force_init_database():
-            logger.info("✅ Strategy 2: SUCCESS - Database initialized after delay")
-            return True
+        with app.app_context():
+            if force_init_database():
+                logger.info("✅ Strategy 2: SUCCESS - Database initialized after delay")
+                return True
     except Exception as e:
         logger.warning(f"⚠️ Strategy 2: Failed - {e}")
     
-    # Strategy 3: Will rely on before_first_request
-    logger.info("🎯 Strategy 3: Will use before_first_request fallback")
+    # Strategy 3: Will rely on before_request (Flask 3.0+ compatible)
+    logger.info("🎯 Strategy 3: Will use @app.before_request fallback (Flask 3.0+ compatible)")
     DATABASE_INITIALIZED = False
     return False
-
-# Initialize database when the module is loaded (free tier compatible)
-initialize_database_on_startup()
 
 # =============================================================================
 # ENHANCED UTILITY FUNCTIONS
@@ -851,8 +853,9 @@ def health_check():
         
         return jsonify({
             "status": overall_health,
-            "version": "5.2.0 - Professional Auto-Repair Edition",
+            "version": "5.3.0 - Flask 3.0+ Compatible Professional Auto-Repair Edition",
             "timestamp": datetime.now().isoformat(),
+            "flask_version": "3.0+ Compatible",
             "database": {
                 "type": db_status['type'],
                 "version": db_status['version'],
@@ -864,7 +867,8 @@ def health_check():
             "initialization": {
                 "attempts": INITIALIZATION_ATTEMPTS,
                 "max_attempts": MAX_INITIALIZATION_ATTEMPTS,
-                "status": "success" if DATABASE_INITIALIZED else "pending"
+                "status": "success" if DATABASE_INITIALIZED else "pending",
+                "first_request_handled": FIRST_REQUEST_HANDLED
             },
             "environment": {
                 "platform": "Render.com" if is_render else "Local",
@@ -1232,14 +1236,14 @@ def extend_license():
     return redirect('/admin')
 
 # =============================================================================
-# ENHANCED HTML TEMPLATES WITH AUTO-REPAIR UI
+# ENHANCED HTML TEMPLATES WITH FLASK 3.0+ BRANDING
 # =============================================================================
 
 INDEX_HTML = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PDF License Server - Professional Auto-Repair Edition</title>
+    <title>PDF License Server - Flask 3.0+ Compatible Professional Edition</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1379,6 +1383,15 @@ INDEX_HTML = '''
             margin-left: 15px;
             box-shadow: 0 3px 15px rgba(102, 126, 234, 0.3);
         }
+        .flask-badge {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            margin-left: 15px;
+            box-shadow: 0 3px 15px rgba(72, 187, 120, 0.3);
+        }
         .auto-repair-status {
             background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
             color: white;
@@ -1409,8 +1422,9 @@ INDEX_HTML = '''
         <div class="header">
             <h1>🔐 PDF License Server</h1>
             <p>
-                Professional Auto-Repair License Management System
-                <span class="render-badge">🚀 Auto-Deployed on Render.com</span>
+                Flask 3.0+ Compatible Professional Auto-Repair License Management System
+                <span class="render-badge">🚀 Render.com</span>
+                <span class="flask-badge">⚡ Flask 3.0+</span>
             </p>
             <div style="margin-top: 25px;">
                 <span class="security-badge">🛡️ Enterprise Security</span>
@@ -1423,24 +1437,25 @@ INDEX_HTML = '''
         {% if database_status %}
         <div class="auto-repair-status">
             <span class="status-indicator status-healthy"></span>
-            ✅ AUTO-REPAIR: Database Successfully Initialized (Attempts: {{ initialization_attempts }})
+            ✅ FLASK 3.0+ AUTO-REPAIR: Database Successfully Initialized (Attempts: {{ initialization_attempts }})
         </div>
         {% else %}
         <div class="auto-repair-status" style="background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);">
             <span class="status-indicator status-degraded"></span>
-            🔧 AUTO-REPAIR: Database Initialization In Progress... (Attempts: {{ initialization_attempts }})
+            🔧 FLASK 3.0+ AUTO-REPAIR: Database Initialization In Progress... (Attempts: {{ initialization_attempts }})
         </div>
         {% endif %}
         
         <div class="card">
-            <h2><span class="status-indicator status-healthy"></span>Server Status</h2>
+            <h2><span class="status-indicator status-healthy"></span>Flask 3.0+ Server Status</h2>
             <p style="color: #718096; margin: 25px 0; line-height: 1.8; font-size: 1.1em;">
                 ✅ Professional license validation service operational<br>
-                🔐 Hardware-locked licensing system with auto-repair<br>
+                🔐 Hardware-locked licensing system with Flask 3.0+ compatibility<br>
                 📈 Real-time validation logging and analytics<br>
                 🌍 Auto-deployed on Render.com with PostgreSQL<br>
                 🚀 Optimized for high-performance production use<br>
-                🔧 Intelligent self-healing database system
+                🔧 Intelligent self-healing database system<br>
+                ⚡ Modern Flask 3.0+ compatible architecture
             </p>
             
             <div style="text-align: center; margin-top: 35px;">
@@ -1450,8 +1465,12 @@ INDEX_HTML = '''
         </div>
         
         <div class="card">
-            <h3 style="margin-bottom: 25px; color: #2d3748; font-size: 1.4em;">🛡️ Professional Features</h3>
+            <h3 style="margin-bottom: 25px; color: #2d3748; font-size: 1.4em;">🛡️ Flask 3.0+ Professional Features</h3>
             <div class="features">
+                <div class="feature">
+                    <strong>⚡ Flask 3.0+ Compatible</strong>
+                    Modern Flask architecture with latest dependency support and enhanced performance
+                </div>
                 <div class="feature">
                     <strong>🔒 Hardware Binding</strong>
                     Cryptographically locked licenses prevent unauthorized sharing with military-grade security
@@ -1461,8 +1480,8 @@ INDEX_HTML = '''
                     Complete validation tracking with IP addresses, timestamps, and detailed forensic logging
                 </div>
                 <div class="feature">
-                    <strong>🔧 Auto-Repair System</strong>
-                    Intelligent self-healing database with automatic table creation and error recovery
+                    <strong>🔧 Smart Auto-Repair</strong>
+                    Flask 3.0+ compatible intelligent self-healing database with automatic table creation
                 </div>
                 <div class="feature">
                     <strong>⏰ Flexible Licensing</strong>
@@ -1470,7 +1489,7 @@ INDEX_HTML = '''
                 </div>
                 <div class="feature">
                     <strong>👨‍💼 Professional Admin</strong>
-                    Complete license lifecycle management with creation, extension, and revocation
+                    Complete license lifecycle management with modern Flask 3.0+ admin interface
                 </div>
                 <div class="feature">
                     <strong>🚀 Enterprise Performance</strong>
@@ -1478,11 +1497,7 @@ INDEX_HTML = '''
                 </div>
                 <div class="feature">
                     <strong>🌐 Render.com Optimized</strong>
-                    Fully optimized for Render's infrastructure with automatic scaling
-                </div>
-                <div class="feature">
-                    <strong>🛡️ Professional Grade</strong>
-                    Zero-downtime deploys with comprehensive health monitoring and diagnostics
+                    Fully optimized for Render's infrastructure with Flask 3.0+ compatibility
                 </div>
             </div>
         </div>
@@ -1498,8 +1513,8 @@ INDEX_HTML = '''
         </div>
         
         <div class="version-info">
-            <p><strong>PDF License Server v5.2.0 - Professional Auto-Repair Edition</strong></p>
-            <p>Optimized for Render.com • Self-Healing Database System • Zero-Downtime Deployment</p>
+            <p><strong>PDF License Server v5.3.0 - Flask 3.0+ Compatible Professional Auto-Repair Edition</strong></p>
+            <p>Optimized for Render.com • Flask 3.0+ Architecture • Self-Healing Database System • Zero-Downtime Deployment</p>
         </div>
     </div>
 </body>
@@ -1510,7 +1525,7 @@ REPAIR_HTML = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Database Auto-Repair - PDF License Server</title>
+    <title>Database Auto-Repair - Flask 3.0+ Compatible PDF License Server</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1593,13 +1608,23 @@ REPAIR_HTML = '''
         .status-error { background: #fed7d7; color: #9b2c2c; }
         .status-warning { background: #fef5e7; color: #b7791f; }
         .status-success { background: #c6f6d5; color: #276749; }
+        .flask-badge {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            margin-left: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🔧 Database Auto-Repair System</h1>
-            <p>Professional Database Recovery & Initialization</p>
+            <p>Flask 3.0+ Compatible Professional Database Recovery & Initialization
+                <span class="flask-badge">⚡ Flask 3.0+</span>
+            </p>
         </div>
         
         {% if error_message %}
@@ -1612,9 +1637,10 @@ REPAIR_HTML = '''
         {% endif %}
         
         <div class="card">
-            <h3 style="margin-bottom: 20px;">📊 Database Diagnostic Report</h3>
+            <h3 style="margin-bottom: 20px;">📊 Flask 3.0+ Database Diagnostic Report</h3>
             
             <div class="status-info">
+                <p><strong>Flask Version:</strong> 3.0+ Compatible</p>
                 <p><strong>Initialization Attempts:</strong> {{ initialization_attempts }}</p>
                 <p><strong>Your IP:</strong> {{ current_ip }}</p>
                 <p><strong>Database Type:</strong> {{ db_status.type }}</p>
@@ -1664,14 +1690,14 @@ REPAIR_HTML = '''
         </div>
         
         <div class="card">
-            <h3 style="margin-bottom: 20px;">🛠️ Repair Actions</h3>
+            <h3 style="margin-bottom: 20px;">🛠️ Flask 3.0+ Repair Actions</h3>
             <p style="margin-bottom: 20px; line-height: 1.6;">
-                The auto-repair system will completely rebuild the database schema with all required tables, 
+                The Flask 3.0+ compatible auto-repair system will completely rebuild the database schema with all required tables, 
                 indexes, and sample data. This is a safe operation that will not affect existing valid data.
             </p>
             
             <form method="POST" action="/admin/repair-database" style="text-align: center;">
-                <button type="submit" class="btn btn-danger" onclick="return confirm('Proceed with database repair? This will recreate all tables.')">
+                <button type="submit" class="btn btn-danger" onclick="return confirm('Proceed with Flask 3.0+ database repair? This will recreate all tables.')">
                     🔧 Execute Database Repair
                 </button>
             </form>
@@ -1690,7 +1716,7 @@ ADMIN_HTML = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>License Administration Dashboard - Auto-Repair Edition</title>
+    <title>License Administration Dashboard - Flask 3.0+ Compatible Auto-Repair Edition</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1917,6 +1943,15 @@ ADMIN_HTML = '''
             margin-left: 10px;
         }
         
+        .flask-badge {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85em;
+            margin-left: 10px;
+        }
+        
         .action-buttons {
             display: flex;
             gap: 5px;
@@ -1937,10 +1972,11 @@ ADMIN_HTML = '''
         <div class="header">
             <h1>🔐 License Administration Dashboard</h1>
             <p>
-                Professional Auto-Repair Edition • Current Session IP: {{ current_ip }}
+                Flask 3.0+ Compatible Professional Auto-Repair Edition • Current Session IP: {{ current_ip }}
                 <span class="info-badge">
                     Database: {% if is_postgresql %}PostgreSQL (Render){% else %}SQLite (Local){% endif %}
                 </span>
+                <span class="flask-badge">⚡ Flask 3.0+</span>
                 <span class="info-badge">
                     🌍 {{ render_url }}
                 </span>
@@ -1949,7 +1985,7 @@ ADMIN_HTML = '''
         
         <div class="repair-status">
             <div>
-                <strong>🔧 Auto-Repair Status:</strong> 
+                <strong>🔧 Flask 3.0+ Auto-Repair Status:</strong> 
                 {% if database_initialized %}
                     ✅ Database Operational ({{ initialization_attempts }} attempts)
                 {% else %}
@@ -1958,7 +1994,7 @@ ADMIN_HTML = '''
             </div>
             <form method="POST" action="/admin/repair-database" style="margin: 0;">
                 <button type="submit" class="btn btn-repair" 
-                        onclick="return confirm('Execute database repair? This will recreate all tables safely.')">
+                        onclick="return confirm('Execute Flask 3.0+ database repair? This will recreate all tables safely.')">
                     🔧 Force Database Repair
                 </button>
             </form>
@@ -2002,6 +2038,7 @@ ADMIN_HTML = '''
                     📋 License Management
                     <div>
                         <span class="info-badge">Total: {{ licenses|length }}</span>
+                        <span class="flask-badge">⚡ Flask 3.0+</span>
                     </div>
                 </div>
                 <div class="card-body" style="overflow-x: auto;">
@@ -2232,7 +2269,7 @@ ADMIN_HTML = '''
         <div id="diagnostics" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    🔧 System Diagnostics
+                    🔧 Flask 3.0+ System Diagnostics
                     <a href="/health" class="btn btn-success">📊 Full Health Report</a>
                 </div>
                 <div class="card-body">
@@ -2251,7 +2288,7 @@ ADMIN_HTML = '''
                         </div>
                         
                         <div style="background: #f8f9fa; padding: 20px; border-radius: 10px;">
-                            <h4>Initialization Status</h4>
+                            <h4>Flask 3.0+ Initialization Status</h4>
                             <p><strong>Initialized:</strong> 
                                 {% if database_initialized %}
                                     <span class="status-badge active">Yes</span>
@@ -2261,6 +2298,7 @@ ADMIN_HTML = '''
                             </p>
                             <p><strong>Attempts:</strong> {{ initialization_attempts }}</p>
                             <p><strong>Platform:</strong> Render.com</p>
+                            <p><strong>Flask:</strong> 3.0+ Compatible</p>
                         </div>
                     </div>
                     
@@ -2318,13 +2356,18 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 # =============================================================================
-# MAIN
+# MAIN - FLASK 3.0+ COMPATIBLE
 # =============================================================================
 
 if __name__ == '__main__':
-    # Initialize database when running locally
-    initialize_database_on_startup()
+    # Initialize database when running locally with app context
+    with app.app_context():
+        initialize_database_on_startup()
     
     # This block only runs during local development
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+# Initialize database on startup for production (with app context)
+with app.app_context():
+    initialize_database_on_startup()
