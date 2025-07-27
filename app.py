@@ -1476,6 +1476,320 @@ def log_admin_session(username, ip_address):
     except Exception as e:
         logger.error(f"Failed to log admin session: {e}")
         return None
+        
+        # Add this right after the GitHub integration class and before ENHANCED_ADMIN_HTML
+
+ENHANCED_INDEX_HTML = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>PDF License Server - Enhanced Professional Edition</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary-color: #64748b;
+            --success-color: #059669;
+            --background: #f8fafc;
+            --surface: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+
+        body { 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 2rem; 
+        }
+
+        .header {
+            text-align: center;
+            background: var(--surface);
+            padding: 3rem;
+            border-radius: 1rem;
+            box-shadow: var(--shadow-lg);
+            margin-bottom: 2rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(135deg, var(--primary-color), var(--success-color));
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--primary-color), var(--success-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            font-size: 1.125rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: #dcfce7;
+            color: #166534;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .card {
+            background: var(--surface);
+            border-radius: 1rem;
+            box-shadow: var(--shadow);
+            margin-bottom: 2rem;
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .card-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            background: #f8fafc;
+        }
+
+        .card-body {
+            padding: 2rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .feature {
+            background: #f8fafc;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border-left: 4px solid var(--primary-color);
+            transition: all 0.2s;
+        }
+
+        .feature:hover {
+            background: #f1f5f9;
+            transform: translateX(4px);
+        }
+
+        .feature h3 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+
+        .feature p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-top: 2rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem;
+            background: {% if database_status %}#dcfce7{% else %}#fef3c7{% endif %};
+            border: 1px solid {% if database_status %}#bbf7d0{% else %}#fde68a{% endif %};
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: {% if database_status %}#059669{% else %}#d97706{% endif %};
+            animation: pulse 2s infinite;
+        }
+
+        .github-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .header h1 { font-size: 2rem; }
+            .features { grid-template-columns: 1fr; }
+            .actions { flex-direction: column; align-items: center; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="bi bi-shield-lock"></i> PDF License Server</h1>
+            <p>Enhanced Flask 3.0+ Professional Edition with GitHub Auto-Deploy</p>
+            <div class="status-badge">
+                <i class="bi bi-check-circle"></i>
+                Enterprise License Management System
+            </div>
+        </div>
+
+        <div class="status-indicator">
+            <div class="status-dot"></div>
+            <div>
+                <strong>System Status:</strong>
+                {% if database_status %}
+                    <span style="color: #059669;">✅ Database Operational ({{ initialization_attempts }} initialization attempts)</span>
+                {% else %}
+                    <span style="color: #d97706;">⚠️ Database Initializing ({{ initialization_attempts }} attempts)</span>
+                {% endif %}
+                <div class="github-status">
+                    <i class="bi bi-github"></i>
+                    {% if github_configured %}
+                        <span style="color: #059669;">✅ GitHub Integration: {{ github_repo }}</span>
+                    {% else %}
+                        <span style="color: #d97706;">⚠️ GitHub Integration: Not configured</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2><i class="bi bi-server"></i> Professional License Validation Service</h2>
+            </div>
+            <div class="card-body">
+                <p style="margin-bottom: 2rem; font-size: 1.125rem; color: var(--text-secondary);">
+                    Enhanced Flask 3.0+ architecture with automated GitHub deployment, real-time client updates,
+                    one-click license management, and professional analytics. Deployed on Render.com with PostgreSQL
+                    for maximum reliability and automated CI/CD workflows.
+                </p>
+                
+                <div class="actions">
+                    <a href="/admin" class="btn btn-primary">
+                        <i class="bi bi-gear"></i>
+                        Admin Dashboard
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h3><i class="bi bi-stars"></i> Features</h3>
+            </div>
+            <div class="card-body">
+                <div class="features">
+                    <div class="feature">
+                        <h3><i class="bi bi-shield-check"></i> Data Preservation</h3>
+                        <p>Smart initialization that preserves existing license data while creating missing database structures</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-github"></i> GitHub Auto-Deploy</h3>
+                        <p>Upload client files directly to GitHub with automatic building and release management</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-cpu"></i> Hardware Binding</h3>
+                        <p>Cryptographically secure hardware locking prevents unauthorized license sharing</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-copy"></i> One-Click Copy</h3>
+                        <p>Professional UI with instant license key copying and optimized admin workflows</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-bell"></i> Auto-Updates</h3>
+                        <p>Clients automatically receive notifications for new versions without manual checks</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-lightning"></i> Modern Architecture</h3>
+                        <p>Flask 3.0+ with responsive design, professional aesthetics, and optimized performance</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 3rem; padding: 2rem; color: var(--text-secondary);">
+            <p><strong>PDF License Server v6.1.0 - Enhanced Flask 3.0+ Edition</strong></p>
+            <p>Professional License Management • GitHub Auto-Deploy • Modern UI Design</p>
+        </div>
+    </div>
+</body>
+</html>
+'''
 
 # =============================================================================
 # ENHANCED HTML TEMPLATES
