@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-🔐 PRODUCTION PDF LICENSE SERVER - FLASK 3.0+ ULTIMATE EDITION (RENDER.COM OPTIMIZED) - FIXED VERSION
-=====================================================================================================
-Complete license server with admin panel, hardware locking, IP tracking, and AUTO-REPAIR functionality
-Version: 5.4.0 - Flask 3.0+ Ultimate Edition with Jinja2 Template Fixes for Render.com
-Compatible with PostgreSQL and SQLite (automatic fallback with intelligent repair)
+🔐 MODERN PDF LICENSE SERVER - FLASK 3.0+ PROFESSIONAL EDITION
+================================================================
+Complete license server with modern admin panel, hardware locking, IP tracking, and data preservation
+Version: 6.0.0 - Modern Flask 3.0+ Edition with Data Preservation and Modern UI
 
-🚀 ULTIMATE EDITION FEATURES:
-- Fixed Jinja2 template compatibility issues (no more hasattr errors)
-- Latest stable dependencies for Render.com deployment
-- Professional datetime formatting filters
+🚀 PROFESSIONAL FEATURES:
+- Modern Flask 3.0+ architecture with data preservation
+- Professional modern UI with Material Design principles
+- Complete license key and hardware ID display
 - Enhanced error handling and logging
-- Full Flask 3.0+ compatibility with modern best practices
-- FIXED: Full license key and hardware ID display
+- Data-preserving database management
+- Responsive modern dashboard design
 """
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash, session
@@ -60,7 +59,7 @@ except ImportError:
 # Always import sqlite3 as fallback
 import sqlite3
 
-# Enhanced logging setup for professional debugging
+# Enhanced logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
@@ -70,14 +69,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global flag to track database initialization status - FLASK 3.0+ COMPATIBLE
+# Global flag to track database initialization status
 DATABASE_INITIALIZED = False
 INITIALIZATION_ATTEMPTS = 0
 MAX_INITIALIZATION_ATTEMPTS = 3
 FIRST_REQUEST_HANDLED = False
 
 # =============================================================================
-# PROFESSIONAL JINJA2 FILTERS FOR DATETIME FORMATTING
+# PROFESSIONAL JINJA2 FILTERS
 # =============================================================================
 
 @app.template_filter('formatdatetime')
@@ -86,16 +85,13 @@ def format_datetime(value, format='%Y-%m-%d'):
     if value is None:
         return "-"
     try:
-        # Handle different types of datetime objects
         if hasattr(value, 'strftime'):
             return value.strftime(format)
         elif isinstance(value, str):
-            # Try to parse string datetime and format it
             try:
                 parsed_date = datetime.fromisoformat(value.replace('Z', '+00:00'))
                 return parsed_date.strftime(format)
             except:
-                # If parsing fails, return first 10 characters (date part)
                 return value[:10] if len(value) >= 10 else value
         else:
             return str(value)
@@ -105,7 +101,7 @@ def format_datetime(value, format='%Y-%m-%d'):
 
 @app.template_filter('formatdatetimefull')
 def format_datetime_full(value, format='%Y-%m-%d %H:%M:%S'):
-    """Format a datetime object to a full string with time. Handles None values gracefully."""
+    """Format a datetime object to a full string with time."""
     if value is None:
         return "-"
     try:
@@ -123,25 +119,7 @@ def format_datetime_full(value, format='%Y-%m-%d %H:%M:%S'):
         logger.warning(f"Error formatting datetime {value}: {e}")
         return str(value) if value else "-"
 
-@app.template_filter('truncate_license')
-def truncate_license(license_key, length=12):
-    """Truncate license key for display but keep it readable"""
-    if not license_key:
-        return "-"
-    if len(license_key) <= length:
-        return license_key
-    return license_key[:length] + "..."
-
-@app.template_filter('truncate_hardware')  
-def truncate_hardware(hardware_id, length=16):
-    """Truncate hardware ID for display but keep it readable"""
-    if not hardware_id:
-        return "-"
-    if len(hardware_id) <= length:
-        return hardware_id
-    return hardware_id[:length] + "..."
-
-# Make Python built-ins available in templates for professional compatibility
+# Make Python built-ins available in templates
 app.jinja_env.globals.update({
     'hasattr': hasattr,
     'len': len,
@@ -152,7 +130,7 @@ app.jinja_env.globals.update({
 })
 
 # =============================================================================
-# PROFESSIONAL DATABASE FUNCTIONS WITH AUTO-REPAIR
+# DATA-PRESERVING DATABASE FUNCTIONS
 # =============================================================================
 
 def get_db_connection():
@@ -205,34 +183,6 @@ def check_table_exists(table_name):
         logger.error(f"Error checking if table {table_name} exists: {e}")
         return False
 
-def check_column_exists(table_name, column_name):
-    """Check if a specific column exists in a table"""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        
-        if is_postgresql():
-            cur.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.columns 
-                    WHERE table_schema = 'public' 
-                    AND table_name = %s 
-                    AND column_name = %s
-                );
-            """, (table_name, column_name))
-            exists = cur.fetchone()[0]
-        else:
-            cur.execute(f"PRAGMA table_info({table_name})")
-            columns = [column[1] for column in cur.fetchall()]
-            exists = column_name in columns
-        
-        cur.close()
-        conn.close()
-        return exists
-    except Exception as e:
-        logger.error(f"Error checking if column {column_name} exists in {table_name}: {e}")
-        return False
-
 def get_database_status():
     """Get comprehensive database status for diagnostics"""
     status = {
@@ -250,7 +200,6 @@ def get_database_status():
         
         if is_postgresql():
             status['type'] = 'PostgreSQL'
-            # Get PostgreSQL version
             try:
                 cur.execute('SELECT version()')
                 status['version'] = cur.fetchone()[0]
@@ -311,94 +260,83 @@ def get_database_status():
     
     return status
 
-def force_init_database():
-    """Force database initialization with comprehensive error handling and repair"""
+def safe_init_database():
+    """SAFE database initialization - creates tables ONLY if they don't exist (preserves data)"""
     global DATABASE_INITIALIZED, INITIALIZATION_ATTEMPTS
     
     INITIALIZATION_ATTEMPTS += 1
-    logger.info(f"🔧 FORCE DATABASE INITIALIZATION - Attempt {INITIALIZATION_ATTEMPTS}")
+    logger.info(f"🔧 SAFE DATABASE INITIALIZATION - Attempt {INITIALIZATION_ATTEMPTS}")
     
     conn = None
     try:
         conn = get_db_connection()
         
         if is_postgresql():
-            # PostgreSQL schema with enhanced error handling
-            logger.info("🐘 Initializing PostgreSQL database with auto-repair...")
-            
-            # Use autocommit mode for DDL operations
+            logger.info("🐘 Safely initializing PostgreSQL database...")
             conn.autocommit = True
             cur = conn.cursor()
             
             try:
-                # Drop and recreate all tables for a clean start
-                logger.info("🗑️ Cleaning existing tables for fresh start...")
+                # Create licenses table ONLY if it doesn't exist
+                if not check_table_exists('licenses'):
+                    logger.info("📋 Creating licenses table...")
+                    cur.execute('''
+                        CREATE TABLE licenses (
+                            id SERIAL PRIMARY KEY,
+                            license_key VARCHAR(255) UNIQUE NOT NULL,
+                            hardware_id VARCHAR(255),
+                            customer_email VARCHAR(255) NOT NULL,
+                            customer_name VARCHAR(255),
+                            created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
+                            payment_id VARCHAR(255),
+                            active BOOLEAN DEFAULT true,
+                            last_used TIMESTAMP WITH TIME ZONE,
+                            validation_count INTEGER DEFAULT 0,
+                            created_by VARCHAR(255) DEFAULT 'system'
+                        )
+                    ''')
+                    logger.info("✅ Licenses table created successfully")
+                else:
+                    logger.info("✅ Licenses table already exists, preserving data")
                 
-                # Drop tables in correct order (respecting foreign keys)
-                drop_tables = [
-                    'DROP TABLE IF EXISTS validation_logs CASCADE',
-                    'DROP TABLE IF EXISTS admin_sessions CASCADE', 
-                    'DROP TABLE IF EXISTS licenses CASCADE'
-                ]
+                # Create validation_logs table ONLY if it doesn't exist
+                if not check_table_exists('validation_logs'):
+                    logger.info("📊 Creating validation_logs table...")
+                    cur.execute('''
+                        CREATE TABLE validation_logs (
+                            id SERIAL PRIMARY KEY,
+                            license_key VARCHAR(255),
+                            hardware_id VARCHAR(255),
+                            timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                            status VARCHAR(100),
+                            ip_address INET,
+                            user_agent TEXT,
+                            details JSONB
+                        )
+                    ''')
+                    logger.info("✅ Validation_logs table created successfully")
+                else:
+                    logger.info("✅ Validation_logs table already exists, preserving data")
                 
-                for drop_sql in drop_tables:
-                    try:
-                        cur.execute(drop_sql)
-                        logger.info(f"✅ Executed: {drop_sql}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Drop table warning: {e}")
+                # Create admin_sessions table ONLY if it doesn't exist
+                if not check_table_exists('admin_sessions'):
+                    logger.info("👨‍💼 Creating admin_sessions table...")
+                    cur.execute('''
+                        CREATE TABLE admin_sessions (
+                            id SERIAL PRIMARY KEY,
+                            session_id VARCHAR(255),
+                            username VARCHAR(255),
+                            ip_address INET,
+                            login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                            last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                        )
+                    ''')
+                    logger.info("✅ Admin_sessions table created successfully")
+                else:
+                    logger.info("✅ Admin_sessions table already exists, preserving data")
                 
-                # Create licenses table
-                logger.info("📋 Creating licenses table...")
-                cur.execute('''
-                    CREATE TABLE licenses (
-                        id SERIAL PRIMARY KEY,
-                        license_key VARCHAR(255) UNIQUE NOT NULL,
-                        hardware_id VARCHAR(255),
-                        customer_email VARCHAR(255) NOT NULL,
-                        customer_name VARCHAR(255),
-                        created_date TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                        expiry_date TIMESTAMP WITH TIME ZONE NOT NULL,
-                        payment_id VARCHAR(255),
-                        active BOOLEAN DEFAULT true,
-                        last_used TIMESTAMP WITH TIME ZONE,
-                        validation_count INTEGER DEFAULT 0,
-                        created_by VARCHAR(255) DEFAULT 'system'
-                    )
-                ''')
-                logger.info("✅ Licenses table created successfully")
-                
-                # Create validation_logs table
-                logger.info("📊 Creating validation_logs table...")
-                cur.execute('''
-                    CREATE TABLE validation_logs (
-                        id SERIAL PRIMARY KEY,
-                        license_key VARCHAR(255),
-                        hardware_id VARCHAR(255),
-                        timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                        status VARCHAR(100),
-                        ip_address INET,
-                        user_agent TEXT,
-                        details JSONB
-                    )
-                ''')
-                logger.info("✅ Validation_logs table created successfully")
-                
-                # Create admin_sessions table
-                logger.info("👨‍💼 Creating admin_sessions table...")
-                cur.execute('''
-                    CREATE TABLE admin_sessions (
-                        id SERIAL PRIMARY KEY,
-                        session_id VARCHAR(255),
-                        username VARCHAR(255),
-                        ip_address INET,
-                        login_time TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                        last_activity TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                ''')
-                logger.info("✅ Admin_sessions table created successfully")
-                
-                # Create indexes for performance
+                # Create indexes for performance (IF NOT EXISTS)
                 logger.info("🚀 Creating performance indexes...")
                 indexes = [
                     'CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)',
@@ -413,20 +351,25 @@ def force_init_database():
                 for index_sql in indexes:
                     try:
                         cur.execute(index_sql)
-                        logger.info(f"✅ Created index: {index_sql.split()[-1]}")
+                        logger.info(f"✅ Created/verified index: {index_sql.split()[-1]}")
                     except Exception as e:
                         logger.warning(f"⚠️ Index creation warning: {e}")
                 
-                # Insert sample data for testing
-                logger.info("🎯 Creating sample license for testing...")
-                cur.execute('''
-                    INSERT INTO licenses (license_key, customer_email, customer_name, expiry_date, created_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (license_key) DO NOTHING
-                ''', ('PDFM-DEMO-TEST-SMPL', 'demo@example.com', 'Demo User', 
-                      (datetime.now() + timedelta(days=365)).isoformat(), 'auto-setup'))
+                # Insert sample data ONLY if licenses table is empty
+                cur.execute('SELECT COUNT(*) FROM licenses')
+                count = cur.fetchone()[0]
+                if count == 0:
+                    logger.info("🎯 Creating sample license for testing...")
+                    cur.execute('''
+                        INSERT INTO licenses (license_key, customer_email, customer_name, expiry_date, created_by)
+                        VALUES (%s, %s, %s, %s, %s)
+                    ''', ('PDFM-DEMO-TEST-SMPL', 'demo@example.com', 'Demo User', 
+                          (datetime.now() + timedelta(days=365)).isoformat(), 'auto-setup'))
+                    logger.info("✅ Sample license created")
+                else:
+                    logger.info(f"✅ Found {count} existing licenses, preserving all data")
                 
-                logger.info("🎉 PostgreSQL database initialized successfully with auto-repair!")
+                logger.info("🎉 PostgreSQL database safely initialized with data preservation!")
                 
             except Exception as e:
                 logger.error(f"❌ Error during PostgreSQL initialization: {e}")
@@ -437,58 +380,63 @@ def force_init_database():
                     
         else:
             # SQLite schema for local development or fallback
-            logger.info("💾 Initializing SQLite database with auto-repair...")
+            logger.info("💾 Safely initializing SQLite database...")
             cur = conn.cursor()
             
             try:
-                # Drop and recreate all tables for clean start
-                logger.info("🗑️ Cleaning existing SQLite tables...")
+                # Create tables ONLY if they don't exist
+                if not check_table_exists('licenses'):
+                    cur.execute('''
+                        CREATE TABLE licenses (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            license_key TEXT UNIQUE NOT NULL,
+                            hardware_id TEXT,
+                            customer_email TEXT NOT NULL,
+                            customer_name TEXT,
+                            created_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            expiry_date TEXT NOT NULL,
+                            payment_id TEXT,
+                            active INTEGER DEFAULT 1,
+                            last_used TEXT,
+                            validation_count INTEGER DEFAULT 0,
+                            created_by TEXT DEFAULT 'system'
+                        )
+                    ''')
+                    logger.info("✅ Licenses table created")
+                else:
+                    logger.info("✅ Licenses table already exists, preserving data")
                 
-                cur.execute('DROP TABLE IF EXISTS validation_logs')
-                cur.execute('DROP TABLE IF EXISTS admin_sessions')
-                cur.execute('DROP TABLE IF EXISTS licenses')
+                if not check_table_exists('validation_logs'):
+                    cur.execute('''
+                        CREATE TABLE validation_logs (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            license_key TEXT,
+                            hardware_id TEXT,
+                            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                            status TEXT,
+                            ip_address TEXT,
+                            user_agent TEXT,
+                            details TEXT
+                        )
+                    ''')
+                    logger.info("✅ Validation_logs table created")
+                else:
+                    logger.info("✅ Validation_logs table already exists, preserving data")
                 
-                # Create tables
-                cur.execute('''
-                    CREATE TABLE licenses (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        license_key TEXT UNIQUE NOT NULL,
-                        hardware_id TEXT,
-                        customer_email TEXT NOT NULL,
-                        customer_name TEXT,
-                        created_date TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        expiry_date TEXT NOT NULL,
-                        payment_id TEXT,
-                        active INTEGER DEFAULT 1,
-                        last_used TEXT,
-                        validation_count INTEGER DEFAULT 0,
-                        created_by TEXT DEFAULT 'system'
-                    )
-                ''')
-                
-                cur.execute('''
-                    CREATE TABLE validation_logs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        license_key TEXT,
-                        hardware_id TEXT,
-                        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
-                        status TEXT,
-                        ip_address TEXT,
-                        user_agent TEXT,
-                        details TEXT
-                    )
-                ''')
-                
-                cur.execute('''
-                    CREATE TABLE admin_sessions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        session_id TEXT,
-                        username TEXT,
-                        ip_address TEXT,
-                        login_time TEXT DEFAULT CURRENT_TIMESTAMP,
-                        last_activity TEXT DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
+                if not check_table_exists('admin_sessions'):
+                    cur.execute('''
+                        CREATE TABLE admin_sessions (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            session_id TEXT,
+                            username TEXT,
+                            ip_address TEXT,
+                            login_time TEXT DEFAULT CURRENT_TIMESTAMP,
+                            last_activity TEXT DEFAULT CURRENT_TIMESTAMP
+                        )
+                    ''')
+                    logger.info("✅ Admin_sessions table created")
+                else:
+                    logger.info("✅ Admin_sessions table already exists, preserving data")
                 
                 # Create indexes
                 cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
@@ -497,15 +445,21 @@ def force_init_database():
                 cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_timestamp ON validation_logs(timestamp)')
                 cur.execute('CREATE INDEX IF NOT EXISTS idx_validation_logs_license ON validation_logs(license_key)')
                 
-                # Insert sample data
-                cur.execute('''
-                    INSERT OR IGNORE INTO licenses (license_key, customer_email, customer_name, expiry_date, created_by)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', ('PDFM-DEMO-TEST-SMPL', 'demo@example.com', 'Demo User', 
-                      (datetime.now() + timedelta(days=365)).isoformat(), 'auto-setup'))
+                # Insert sample data ONLY if licenses table is empty
+                result = cur.execute('SELECT COUNT(*) FROM licenses').fetchone()
+                count = result[0] if result else 0
+                if count == 0:
+                    cur.execute('''
+                        INSERT OR IGNORE INTO licenses (license_key, customer_email, customer_name, expiry_date, created_by)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', ('PDFM-DEMO-TEST-SMPL', 'demo@example.com', 'Demo User', 
+                          (datetime.now() + timedelta(days=365)).isoformat(), 'auto-setup'))
+                    logger.info("✅ Sample license created")
+                else:
+                    logger.info(f"✅ Found {count} existing licenses, preserving all data")
                 
                 conn.commit()
-                logger.info("🎉 SQLite database initialized successfully with auto-repair!")
+                logger.info("🎉 SQLite database safely initialized with data preservation!")
                 
             except Exception as e:
                 conn.rollback()
@@ -516,11 +470,11 @@ def force_init_database():
                 cur.close()
         
         DATABASE_INITIALIZED = True
-        logger.info("✅ DATABASE INITIALIZATION COMPLETED SUCCESSFULLY!")
+        logger.info("✅ SAFE DATABASE INITIALIZATION COMPLETED SUCCESSFULLY!")
         return True
             
     except Exception as e:
-        logger.error(f"💥 CRITICAL: Database initialization failed completely: {e}")
+        logger.error(f"💥 CRITICAL: Safe database initialization failed: {e}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
         DATABASE_INITIALIZED = False
         return False
@@ -530,40 +484,6 @@ def force_init_database():
                 conn.close()
             except:
                 pass
-
-def init_database():
-    """Legacy database initialization - now redirects to force_init_database"""
-    return force_init_database()
-
-# =============================================================================
-# FLASK 3.0+ COMPATIBLE AUTO-REPAIR SYSTEM
-# =============================================================================
-
-@app.before_request
-def initialize_database_before_first_request():
-    """
-    🚀 FLASK 3.0+ ULTIMATE COMPATIBLE DATABASE AUTO-INITIALIZATION
-    This runs before each request but only initializes once using a flag
-    Replaces the deprecated @app.before_first_request decorator
-    """
-    global DATABASE_INITIALIZED, FIRST_REQUEST_HANDLED
-    
-    # Only run once, on the first request
-    if not FIRST_REQUEST_HANDLED:
-        FIRST_REQUEST_HANDLED = True
-        logger.info("🔧 FLASK 3.0+ ULTIMATE AUTO-REPAIR: Before first request database initialization triggered")
-        
-        if not DATABASE_INITIALIZED:
-            logger.info("🔄 Database not initialized, attempting auto-repair...")
-            success = force_init_database()
-            
-            if success:
-                logger.info("✅ FLASK 3.0+ ULTIMATE AUTO-REPAIR: Database successfully initialized before first request!")
-            else:
-                logger.error("❌ FLASK 3.0+ ULTIMATE AUTO-REPAIR: Database initialization failed before first request!")
-                # Continue anyway - app might work with degraded functionality
-        else:
-            logger.info("✅ Database already initialized, skipping auto-repair")
 
 def ensure_database_ready():
     """Ensure database is ready with intelligent checking"""
@@ -581,51 +501,56 @@ def ensure_database_ready():
             missing_tables.append(table)
     
     if missing_tables:
-        logger.warning(f"🔧 Missing tables detected: {missing_tables}. Triggering auto-repair...")
-        return force_init_database()
+        logger.warning(f"🔧 Missing tables detected: {missing_tables}. Triggering safe initialization...")
+        return safe_init_database()
     else:
         DATABASE_INITIALIZED = True
         return True
 
 # =============================================================================
-# STARTUP INITIALIZATION (ENHANCED FOR RENDER.COM + FLASK 3.0+)
+# FLASK 3.0+ COMPATIBLE STARTUP SYSTEM
 # =============================================================================
 
+@app.before_request
+def initialize_database_before_first_request():
+    """Flask 3.0+ compatible database auto-initialization"""
+    global DATABASE_INITIALIZED, FIRST_REQUEST_HANDLED
+    
+    if not FIRST_REQUEST_HANDLED:
+        FIRST_REQUEST_HANDLED = True
+        logger.info("🔧 Flask 3.0+ auto-initialization triggered")
+        
+        if not DATABASE_INITIALIZED:
+            logger.info("🔄 Database not initialized, attempting safe initialization...")
+            success = safe_init_database()
+            
+            if success:
+                logger.info("✅ Database successfully initialized before first request!")
+            else:
+                logger.error("❌ Database initialization failed before first request!")
+
 def initialize_database_on_startup():
-    """Initialize database on startup - Flask 3.0+ Ultimate edition with multi-strategy approach"""
+    """Initialize database on startup - Flask 3.0+ edition with safe approach"""
     global DATABASE_INITIALIZED
     
-    logger.info("🚀 PDF License Server v5.4.0 - Flask 3.0+ Ultimate Edition Starting...")
-    logger.info("🔧 Multi-strategy database initialization for Render.com + Flask 3.0+ Ultimate...")
+    logger.info("🚀 PDF License Server v6.0.0 - Modern Flask 3.0+ Edition Starting...")
+    logger.info("🔧 Safe database initialization for data preservation...")
     
-    # Strategy 1: Try immediate initialization with app context
     try:
-        logger.info("📡 Strategy 1: Immediate database initialization with app context...")
+        logger.info("📡 Safe initialization with app context...")
         with app.app_context():
-            if force_init_database():
-                logger.info("✅ Strategy 1: SUCCESS - Database initialized immediately with app context")
+            if safe_init_database():
+                logger.info("✅ SUCCESS - Database safely initialized with data preservation")
                 return True
     except Exception as e:
-        logger.warning(f"⚠️ Strategy 1: Failed - {e}")
+        logger.warning(f"⚠️ Startup initialization warning: {e}")
     
-    # Strategy 2: Delayed initialization (for slow Render startup)
-    try:
-        logger.info("⏰ Strategy 2: Delayed initialization (3 second wait)...")
-        time.sleep(3)
-        with app.app_context():
-            if force_init_database():
-                logger.info("✅ Strategy 2: SUCCESS - Database initialized after delay")
-                return True
-    except Exception as e:
-        logger.warning(f"⚠️ Strategy 2: Failed - {e}")
-    
-    # Strategy 3: Will rely on before_request (Flask 3.0+ compatible)
-    logger.info("🎯 Strategy 3: Will use @app.before_request fallback (Flask 3.0+ Ultimate compatible)")
+    logger.info("🎯 Will use @app.before_request fallback (Flask 3.0+ compatible)")
     DATABASE_INITIALIZED = False
     return False
 
 # =============================================================================
-# ENHANCED UTILITY FUNCTIONS
+# UTILITY FUNCTIONS
 # =============================================================================
 
 def generate_license_key():
@@ -638,7 +563,6 @@ def generate_license_key():
 
 def get_client_ip():
     """Get client IP address, handling proxies and Render's infrastructure"""
-    # Check Render-specific headers first
     if request.headers.get('X-Forwarded-For'):
         return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     elif request.headers.get('X-Real-IP'):
@@ -653,7 +577,6 @@ def get_client_ip():
 def log_validation(license_key, hardware_id, status, ip_address, user_agent=None, details=None):
     """Log validation attempt with improved error handling"""
     try:
-        # Ensure database is ready
         if not ensure_database_ready():
             logger.error("Database not ready for logging validation")
             return
@@ -683,7 +606,6 @@ def log_validation(license_key, hardware_id, status, ip_address, user_agent=None
 def log_admin_session(username, ip_address):
     """Log admin login session with database readiness check"""
     try:
-        # Ensure database is ready
         if not ensure_database_ready():
             logger.error("Database not ready for logging admin session")
             return None
@@ -713,7 +635,6 @@ def log_admin_session(username, ip_address):
 
 def create_license(customer_email, customer_name=None, duration_days=30, created_by='system'):
     """Create a new license with database readiness check"""
-    # Ensure database is ready
     if not ensure_database_ready():
         raise Exception("Database not ready for license creation")
     
@@ -766,14 +687,13 @@ def require_auth(f):
     return decorated_function
 
 # =============================================================================
-# API ENDPOINTS WITH AUTO-REPAIR
+# API ENDPOINTS
 # =============================================================================
 
 @app.route('/api/validate', methods=['POST'])
 def validate_license():
-    """Validate a license key from the desktop application with auto-repair"""
+    """Validate a license key from the desktop application"""
     try:
-        # Ensure database is ready before processing
         if not ensure_database_ready():
             return jsonify({
                 "valid": False,
@@ -918,21 +838,16 @@ def validate_license():
 def health_check():
     """Enhanced health check endpoint with comprehensive diagnostics"""
     try:
-        # Get database status
         db_status = get_database_status()
-        
-        # Check if we're running on Render
         is_render = bool(os.environ.get('RENDER_SERVICE_ID'))
-        
-        # Determine overall health
         overall_health = "healthy" if db_status['connection'] and len(db_status['issues']) == 0 else "degraded"
         status_code = 200 if overall_health == "healthy" else 503
         
         return jsonify({
             "status": overall_health,
-            "version": "5.4.0 - Flask 3.0+ Ultimate Edition with Jinja2 Fixes",
+            "version": "6.0.0 - Modern Flask 3.0+ Edition with Data Preservation",
             "timestamp": datetime.now().isoformat(),
-            "flask_version": "3.0+ Ultimate Compatible",
+            "flask_version": "3.0+ Modern Compatible",
             "database": {
                 "type": db_status['type'],
                 "version": db_status['version'],
@@ -968,80 +883,25 @@ def health_check():
         }), 503
 
 # =============================================================================
-# PROFESSIONAL DATABASE REPAIR ENDPOINTS
-# =============================================================================
-
-@app.route('/api/repair-database', methods=['POST'])
-def api_repair_database():
-    """Professional database repair endpoint with authentication"""
-    try:
-        # Simple authentication for this endpoint
-        auth_token = request.headers.get('Authorization')
-        expected_token = os.environ.get('DB_REPAIR_TOKEN', 'repair-2024')
-        
-        if auth_token != f"Bearer {expected_token}":
-            # Try basic auth as fallback
-            auth = request.authorization
-            if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
-                return jsonify({"error": "Unauthorized - Invalid repair token"}), 401
-        
-        logger.info("🔧 API DATABASE REPAIR INITIATED")
-        
-        # Get current status
-        db_status_before = get_database_status()
-        
-        # Force repair
-        success = force_init_database()
-        
-        # Get status after repair
-        db_status_after = get_database_status()
-        
-        return jsonify({
-            "status": "success" if success else "failed",
-            "message": "Database repair completed successfully" if success else "Database repair failed",
-            "timestamp": datetime.now().isoformat(),
-            "before_repair": db_status_before,
-            "after_repair": db_status_after,
-            "initialization_attempts": INITIALIZATION_ATTEMPTS
-        })
-    except Exception as e:
-        logger.error(f"Database repair via API failed: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-@app.route('/api/init-db', methods=['POST'])
-def api_init_database():
-    """API endpoint to initialize database (for pre-deploy command) - now uses repair system"""
-    return api_repair_database()
-
-# =============================================================================
-# WEB INTERFACE WITH AUTO-REPAIR INTEGRATION
+# MODERN WEB INTERFACE
 # =============================================================================
 
 @app.route('/')
 def index():
-    """Main page with auto-repair status"""
-    # Ensure database is ready
+    """Modern main page"""
     ensure_database_ready()
-    
-    return render_template_string(INDEX_HTML, 
+    return render_template_string(MODERN_INDEX_HTML, 
                                 database_status=DATABASE_INITIALIZED,
                                 initialization_attempts=INITIALIZATION_ATTEMPTS)
 
 @app.route('/admin')
 @require_auth
 def admin():
-    """Enhanced admin panel with auto-repair diagnostics and Jinja2 template fixes - FIXED DISPLAY VERSION"""
-    # Log admin access
+    """Modern admin panel with data preservation"""
     log_admin_session(request.authorization.username, get_client_ip())
     
-    # Ensure database is ready
     if not ensure_database_ready():
-        # Show repair interface
-        return render_template_string(REPAIR_HTML, 
+        return render_template_string(MODERN_REPAIR_HTML, 
                                     current_ip=get_client_ip(),
                                     db_status=get_database_status(),
                                     initialization_attempts=INITIALIZATION_ATTEMPTS)
@@ -1051,7 +911,6 @@ def admin():
         cur = conn.cursor()
         
         if is_postgresql():
-            # Use dictionary cursor for PostgreSQL
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
             # Get all licenses
@@ -1073,15 +932,6 @@ def admin():
                 FROM licenses
             ''')
             stats = cur.fetchone()
-            
-            # Get recent admin logins
-            cur.execute('''
-                SELECT username, ip_address, login_time 
-                FROM admin_sessions 
-                ORDER BY login_time DESC 
-                LIMIT 10
-            ''')
-            recent_logins = cur.fetchall()
             
             # Get recent validation attempts
             cur.execute('''
@@ -1110,13 +960,6 @@ def admin():
                 FROM licenses
             ''').fetchone()
             
-            recent_logins = cur.execute('''
-                SELECT username, ip_address, login_time 
-                FROM admin_sessions 
-                ORDER BY login_time DESC 
-                LIMIT 10
-            ''').fetchall()
-            
             recent_validations = cur.execute('''
                 SELECT license_key, hardware_id, status, ip_address, timestamp
                 FROM validation_logs 
@@ -1127,10 +970,9 @@ def admin():
         cur.close()
         conn.close()
         
-        return render_template_string(ADMIN_HTML, 
+        return render_template_string(MODERN_ADMIN_HTML, 
                                     licenses=licenses, 
                                     stats=stats, 
-                                    recent_logins=recent_logins,
                                     recent_validations=recent_validations,
                                     current_ip=get_client_ip(),
                                     is_postgresql=is_postgresql(),
@@ -1142,29 +984,28 @@ def admin():
         logger.error(f"Admin panel error: {e}")
         logger.exception("Full traceback:")
         
-        # Show repair interface on error
-        return render_template_string(REPAIR_HTML, 
+        return render_template_string(MODERN_REPAIR_HTML, 
                                     current_ip=get_client_ip(),
                                     db_status=get_database_status(),
                                     initialization_attempts=INITIALIZATION_ATTEMPTS,
                                     error_message=str(e))
 
-@app.route('/admin/repair-database', methods=['POST'])
+@app.route('/admin/safe-repair', methods=['POST'])
 @require_auth
-def admin_repair_database():
-    """Admin panel database repair button"""
+def admin_safe_repair():
+    """Admin panel safe database repair - preserves data"""
     try:
-        logger.info("🔧 ADMIN PANEL DATABASE REPAIR INITIATED")
+        logger.info("🔧 ADMIN PANEL SAFE DATABASE REPAIR INITIATED")
         
-        success = force_init_database()
+        success = safe_init_database()
         
         if success:
-            flash('✅ Database repair completed successfully! All tables have been recreated.', 'success')
+            flash('✅ Database safely repaired! Missing tables created, existing data preserved.', 'success')
         else:
             flash('❌ Database repair failed. Please check the logs for details.', 'error')
         
     except Exception as e:
-        logger.error(f"Admin database repair failed: {e}")
+        logger.error(f"Admin safe repair failed: {e}")
         flash(f'❌ Database repair error: {e}', 'error')
     
     return redirect('/admin')
@@ -1172,9 +1013,8 @@ def admin_repair_database():
 @app.route('/admin/create_license', methods=['POST'])
 @require_auth
 def create_license_endpoint():
-    """Create a new license from admin panel with auto-repair"""
+    """Create a new license from admin panel"""
     try:
-        # Ensure database is ready
         if not ensure_database_ready():
             flash('❌ Database not ready. Please try the repair button first.', 'error')
             return redirect('/admin')
@@ -1205,7 +1045,7 @@ def create_license_endpoint():
 @app.route('/admin/delete_license', methods=['POST'])
 @require_auth
 def delete_license():
-    """Delete a license with auto-repair support"""
+    """Delete a license"""
     try:
         if not ensure_database_ready():
             flash('❌ Database not ready. Please try the repair button first.', 'error')
@@ -1236,7 +1076,7 @@ def delete_license():
 @app.route('/admin/toggle_license', methods=['POST'])
 @require_auth
 def toggle_license():
-    """Toggle license active status with auto-repair support"""
+    """Toggle license active status"""
     try:
         if not ensure_database_ready():
             flash('❌ Database not ready. Please try the repair button first.', 'error')
@@ -1267,7 +1107,7 @@ def toggle_license():
 @app.route('/admin/extend_license', methods=['POST'])
 @require_auth
 def extend_license():
-    """Extend a license by specified days with auto-repair support"""
+    """Extend a license by specified days"""
     try:
         if not ensure_database_ready():
             flash('❌ Database not ready. Please try the repair button first.', 'error')
@@ -1286,7 +1126,6 @@ def extend_license():
                 WHERE license_key = %s
             ''', (extend_days, license_key))
         else:
-            # For SQLite, we need to fetch current expiry and calculate new date
             result = cur.execute(
                 'SELECT expiry_date FROM licenses WHERE license_key = ?',
                 (license_key,)
@@ -1313,478 +1152,517 @@ def extend_license():
     return redirect('/admin')
 
 # =============================================================================
-# ULTIMATE HTML TEMPLATES WITH JINJA2 FIXES - FULL DISPLAY VERSION
+# MODERN HTML TEMPLATES
 # =============================================================================
 
-INDEX_HTML = '''
+MODERN_INDEX_HTML = '''
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>PDF License Server - Flask 3.0+ Ultimate Edition</title>
+    <title>PDF License Server - Modern Flask Edition</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+        :root {
+            --primary-color: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary-color: #64748b;
+            --success-color: #059669;
+            --background: #f8fafc;
+            --surface: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
         }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header { 
-            text-align: center; 
-            background: white; 
-            padding: 40px; 
-            border-radius: 20px; 
-            box-shadow: 0 20px 60px rgba(0,0,0,0.15); 
-            margin-bottom: 30px;
+
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+
+        body { 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 2rem; 
+        }
+
+        .header {
+            text-align: center;
+            background: var(--surface);
+            padding: 3rem;
+            border-radius: 1rem;
+            box-shadow: var(--shadow-lg);
+            margin-bottom: 2rem;
             position: relative;
             overflow: hidden;
         }
+
         .header::before {
             content: '';
             position: absolute;
             top: 0;
             left: 0;
             right: 0;
-            height: 5px;
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            height: 4px;
+            background: linear-gradient(135deg, var(--primary-color), var(--success-color));
         }
-        .header h1 { 
-            font-size: 2.8em; 
-            color: #2d3748; 
-            margin-bottom: 15px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--primary-color), var(--success-color));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            text-shadow: 0 2px 10px rgba(102, 126, 234, 0.2);
+            background-clip: text;
         }
-        .header p { font-size: 1.3em; color: #718096; line-height: 1.6; }
-        .card { 
-            background: white; 
-            padding: 35px; 
-            border-radius: 20px; 
-            box-shadow: 0 15px 50px rgba(0,0,0,0.1); 
-            margin: 25px 0;
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-            border: 1px solid rgba(102, 126, 234, 0.1);
+
+        .header p {
+            font-size: 1.125rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
         }
-        .card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 25px 80px rgba(0,0,0,0.15);
-        }
-        .btn { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-            padding: 16px 32px; 
-            text-decoration: none; 
-            border-radius: 12px; 
-            display: inline-block; 
-            margin: 15px 8px; 
-            font-weight: 600;
-            font-size: 1.1em;
-            transition: all 0.3s ease;
-            border: none;
-            cursor: pointer;
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.3);
-        }
-        .btn:hover { 
-            transform: translateY(-3px);
-            box-shadow: 0 8px 30px rgba(102, 126, 234, 0.5);
-        }
-        .btn-success {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            box-shadow: 0 5px 20px rgba(72, 187, 120, 0.3);
-        }
-        .btn-success:hover {
-            box-shadow: 0 8px 30px rgba(72, 187, 120, 0.5);
-        }
-        .features { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
-            gap: 25px; 
-            margin-top: 25px;
-        }
-        .feature { 
-            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
-            padding: 30px; 
-            border-radius: 18px; 
-            border-left: 5px solid #48bb78;
-            transition: all 0.3s ease;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
-        }
-        .feature:hover {
-            background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
-            transform: translateX(8px);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.1);
-        }
-        .feature strong { 
-            color: #2d3748; 
-            font-size: 1.2em; 
-            display: block; 
-            margin-bottom: 12px;
-        }
-        .status-indicator {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            margin-right: 10px;
-            animation: pulse 2s infinite;
-        }
-        .status-healthy { background: #48bb78; }
-        .status-degraded { background: #ed8936; }
-        .status-error { background: #e53e3e; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.1); }
-        }
-        .security-badge {
+
+        .status-badge {
             display: inline-flex;
             align-items: center;
-            background: linear-gradient(135deg, #e6fffa 0%, #b2f5ea 100%);
-            color: #234e52;
-            padding: 10px 18px;
-            border-radius: 25px;
-            font-size: 0.95em;
-            margin: 12px 8px;
+            gap: 0.5rem;
+            background: #dcfce7;
+            color: #166534;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .card {
+            background: var(--surface);
+            border-radius: 1rem;
+            box-shadow: var(--shadow);
+            margin-bottom: 2rem;
+            overflow: hidden;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .card-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            background: #f8fafc;
+        }
+
+        .card-body {
+            padding: 2rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .btn-success {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #047857;
+            transform: translateY(-1px);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .feature {
+            background: #f8fafc;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border-left: 4px solid var(--primary-color);
+            transition: all 0.2s;
+        }
+
+        .feature:hover {
+            background: #f1f5f9;
+            transform: translateX(4px);
+        }
+
+        .feature h3 {
+            font-size: 1.125rem;
             font-weight: 600;
-            box-shadow: 0 3px 15px rgba(72, 187, 120, 0.2);
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
         }
-        .render-badge {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            margin-left: 15px;
-            box-shadow: 0 3px 15px rgba(102, 126, 234, 0.3);
+
+        .feature p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
         }
-        .flask-badge {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            margin-left: 15px;
-            box-shadow: 0 3px 15px rgba(72, 187, 120, 0.3);
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-top: 2rem;
         }
-        .auto-repair-status {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-            padding: 15px 25px;
-            border-radius: 15px;
-            margin: 20px 0;
-            text-align: center;
-            font-weight: 600;
-            box-shadow: 0 5px 20px rgba(72, 187, 120, 0.3);
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem;
+            background: {% if database_status %}#dcfce7{% else %}#fef3c7{% endif %};
+            border: 1px solid {% if database_status %}#bbf7d0{% else %}#fde68a{% endif %};
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
         }
-        .version-info {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 15px;
-            margin-top: 30px;
-            text-align: center;
-            border: 2px solid #e9ecef;
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: {% if database_status %}#059669{% else %}#d97706{% endif %};
+            animation: pulse 2s infinite;
         }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
         @media (max-width: 768px) {
-            .header h1 { font-size: 2.2em; }
+            .container { padding: 1rem; }
+            .header h1 { font-size: 2rem; }
             .features { grid-template-columns: 1fr; }
-            .btn { font-size: 1em; padding: 14px 24px; }
+            .actions { flex-direction: column; align-items: center; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔐 PDF License Server</h1>
-            <p>
-                Flask 3.0+ Ultimate Edition with Professional Jinja2 Template Engine - FIXED DISPLAY VERSION
-                <span class="render-badge">🚀 Render.com</span>
-                <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
-            </p>
-            <div style="margin-top: 25px;">
-                <span class="security-badge">🛡️ Enterprise Security</span>
-                <span class="security-badge">🔒 Hardware Binding</span>
-                <span class="security-badge">📊 Real-time Analytics</span>
-                <span class="security-badge">🔧 Ultimate Auto-Repair</span>
-                <span class="security-badge">📱 Full Display Fixed</span>
+            <h1><i class="bi bi-shield-lock"></i> PDF License Server</h1>
+            <p>Modern Flask 3.0+ Professional Edition with Data Preservation Technology</p>
+            <div class="status-badge">
+                <i class="bi bi-check-circle"></i>
+                Enterprise License Management System
             </div>
         </div>
-        
-        {% if database_status %}
-        <div class="auto-repair-status">
-            <span class="status-indicator status-healthy"></span>
-            ✅ FLASK 3.0+ ULTIMATE AUTO-REPAIR: Database Successfully Initialized (Attempts: {{ initialization_attempts }})
+
+        <div class="status-indicator">
+            <div class="status-dot"></div>
+            <div>
+                <strong>System Status:</strong>
+                {% if database_status %}
+                    <span style="color: #059669;">✅ Database Operational ({{ initialization_attempts }} initialization attempts)</span>
+                {% else %}
+                    <span style="color: #d97706;">⚠️ Database Initializing ({{ initialization_attempts }} attempts)</span>
+                {% endif %}
+            </div>
         </div>
-        {% else %}
-        <div class="auto-repair-status" style="background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);">
-            <span class="status-indicator status-degraded"></span>
-            🔧 FLASK 3.0+ ULTIMATE AUTO-REPAIR: Database Initialization In Progress... (Attempts: {{ initialization_attempts }})
-        </div>
-        {% endif %}
-        
+
         <div class="card">
-            <h2><span class="status-indicator status-healthy"></span>Flask 3.0+ Ultimate Server Status</h2>
-            <p style="color: #718096; margin: 25px 0; line-height: 1.8; font-size: 1.1em;">
-                ✅ Professional license validation service operational<br>
-                🔐 Hardware-locked licensing system with Flask 3.0+ Ultimate compatibility<br>
-                📈 Real-time validation logging and analytics<br>
-                🌍 Auto-deployed on Render.com with PostgreSQL<br>
-                🚀 Optimized for high-performance production use<br>
-                🔧 Intelligent self-healing database system<br>
-                ⚡ Modern Flask 3.0+ Ultimate architecture with Jinja2 template fixes<br>
-                📱 FIXED: Complete license key and hardware ID display
-            </p>
-            
-            <div style="text-align: center; margin-top: 35px;">
-                <a href="/admin" class="btn">🛠️ Admin Dashboard</a>
-                <a href="/health" class="btn btn-success">💚 System Health</a>
+            <div class="card-header">
+                <h2><i class="bi bi-server"></i> Professional License Validation Service</h2>
+            </div>
+            <div class="card-body">
+                <p style="margin-bottom: 2rem; font-size: 1.125rem; color: var(--text-secondary);">
+                    Modern Flask 3.0+ architecture providing enterprise-grade license validation with hardware binding,
+                    real-time analytics, and comprehensive audit logging. Deployed on Render.com with PostgreSQL for
+                    maximum reliability and performance.
+                </p>
+                
+                <div class="actions">
+                    <a href="/admin" class="btn btn-primary">
+                        <i class="bi bi-gear"></i>
+                        Admin Dashboard
+                    </a>
+                    <a href="/health" class="btn btn-success">
+                        <i class="bi bi-heart-pulse"></i>
+                        System Health
+                    </a>
+                </div>
             </div>
         </div>
-        
+
         <div class="card">
-            <h3 style="margin-bottom: 25px; color: #2d3748; font-size: 1.4em;">🛡️ Flask 3.0+ Ultimate Professional Features</h3>
-            <div class="features">
-                <div class="feature">
-                    <strong>⚡ Flask 3.0+ Ultimate</strong>
-                    Latest Flask architecture with professional Jinja2 template fixes and enhanced performance
-                </div>
-                <div class="feature">
-                    <strong>🔧 Jinja2 Template Fixes</strong>
-                    Professional template engine with resolved hasattr errors and enhanced datetime formatting
-                </div>
-                <div class="feature">
-                    <strong>📱 Full Display Fixed</strong>
-                    Complete license keys and hardware IDs are now properly displayed in admin panel
-                </div>
-                <div class="feature">
-                    <strong>🔒 Hardware Binding</strong>
-                    Cryptographically locked licenses prevent unauthorized sharing with military-grade security
-                </div>
-                <div class="feature">
-                    <strong>📧 Contact Integration</strong>
-                    Seamless email contact system replacing generic server URLs
-                </div>
-                <div class="feature">
-                    <strong>🔧 Ultimate Auto-Repair</strong>
-                    Flask 3.0+ compatible intelligent self-healing database with automatic table creation
-                </div>
-                <div class="feature">
-                    <strong>⏰ Flexible Licensing</strong>
-                    Support for trial, monthly, quarterly, and annual licenses with automatic expiration
-                </div>
-                <div class="feature">
-                    <strong>🌐 Render.com Optimized</strong>
-                    Fully optimized for Render's infrastructure with Flask 3.0+ Ultimate compatibility
+            <div class="card-header">
+                <h3><i class="bi bi-stars"></i> Modern Professional Features</h3>
+            </div>
+            <div class="card-body">
+                <div class="features">
+                    <div class="feature">
+                        <h3><i class="bi bi-shield-check"></i> Data Preservation</h3>
+                        <p>Smart initialization that preserves existing license data while creating missing database structures</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-cpu"></i> Hardware Binding</h3>
+                        <p>Cryptographically secure hardware locking prevents unauthorized license sharing</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-graph-up"></i> Real-time Analytics</h3>
+                        <p>Comprehensive validation logging and usage analytics with professional dashboard</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-cloud"></i> Cloud Optimized</h3>
+                        <p>Fully optimized for Render.com with PostgreSQL and automatic scaling capabilities</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-clock-history"></i> Flexible Licensing</h3>
+                        <p>Support for trial, monthly, quarterly, and annual licenses with automatic expiration handling</p>
+                    </div>
+                    <div class="feature">
+                        <h3><i class="bi bi-lightning"></i> Modern Architecture</h3>
+                        <p>Flask 3.0+ compatible with modern UI, responsive design, and professional aesthetics</p>
+                    </div>
                 </div>
             </div>
         </div>
-        
-        <div class="card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-            <h3 style="margin-bottom: 20px;">📡 API Endpoint</h3>
-            <code style="background: rgba(255,255,255,0.2); padding: 18px; border-radius: 12px; display: block; font-size: 1.2em; backdrop-filter: blur(10px);">
-                POST /api/validate
-            </code>
-            <p style="margin-top: 18px; opacity: 0.9; font-size: 1.1em;">
-                Professional license validation with hardware ID verification and comprehensive audit logging
-            </p>
-        </div>
-        
-        <div class="version-info">
-            <p><strong>PDF License Server v5.4.0 - Flask 3.0+ Ultimate Edition with FIXED DISPLAY</strong></p>
-            <p>Optimized for Render.com • Flask 3.0+ Ultimate Architecture • Professional Jinja2 Engine • Self-Healing Database System • Complete UI Display Fixed</p>
+
+        <div style="text-align: center; margin-top: 3rem; padding: 2rem; color: var(--text-secondary);">
+            <p><strong>PDF License Server v6.0.0 - Modern Flask 3.0+ Edition</strong></p>
+            <p>Professional License Management • Data Preservation Technology • Modern UI Design</p>
         </div>
     </div>
 </body>
 </html>
 '''
 
-REPAIR_HTML = '''
+MODERN_REPAIR_HTML = '''
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Database Auto-Repair - Flask 3.0+ Ultimate Edition</title>
+    <title>Database Repair - Modern Flask Edition</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --danger-color: #dc2626;
+            --warning-color: #d97706;
+            --success-color: #059669;
+            --background: #fef2f2;
+            --surface: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
+            font-family: 'Inter', sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
             min-height: 100vh;
-            padding: 20px;
+            padding: 2rem;
+        }
+
+        .container { max-width: 800px; margin: 0 auto; }
+
+        .header {
+            text-align: center;
+            background: var(--surface);
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 25px rgba(220, 38, 38, 0.1);
+            margin-bottom: 2rem;
+            border: 1px solid #fecaca;
+        }
+
+        .card {
+            background: var(--surface);
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 1.5rem;
+            background: #f8fafc;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+        }
+
+        .card-body { padding: 2rem; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .btn-danger {
+            background: var(--danger-color);
             color: white;
         }
-        .container { max-width: 800px; margin: 0 auto; }
-        .header { 
-            text-align: center; 
-            background: rgba(255,255,255,0.1); 
-            padding: 40px; 
-            border-radius: 20px; 
-            backdrop-filter: blur(10px);
-            margin-bottom: 30px;
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        .header h1 { font-size: 2.5em; margin-bottom: 15px; }
-        .card { 
-            background: rgba(255,255,255,0.95); 
-            color: #2d3748;
-            padding: 30px; 
-            border-radius: 20px; 
-            margin: 20px 0;
-            box-shadow: 0 15px 50px rgba(0,0,0,0.2);
-        }
-        .btn { 
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white; 
-            padding: 15px 30px; 
-            border: none; 
-            border-radius: 12px; 
-            cursor: pointer; 
-            font-size: 1.1em;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 5px 20px rgba(72, 187, 120, 0.3);
-        }
-        .btn:hover { 
-            transform: translateY(-3px);
-            box-shadow: 0 8px 30px rgba(72, 187, 120, 0.5);
-        }
-        .btn-danger {
-            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
-            box-shadow: 0 5px 20px rgba(229, 62, 62, 0.3);
-        }
+
         .btn-danger:hover {
-            box-shadow: 0 8px 30px rgba(229, 62, 62, 0.5);
+            background: #b91c1c;
+            transform: translateY(-1px);
         }
-        .status-info {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            margin: 15px 0;
-            border-left: 4px solid #e53e3e;
-        }
+
         .diagnostic-table {
             width: 100%;
             border-collapse: collapse;
-            margin: 15px 0;
+            margin: 1rem 0;
         }
+
         .diagnostic-table th, .diagnostic-table td {
-            padding: 12px;
+            padding: 0.75rem;
             text-align: left;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid var(--border);
         }
+
         .diagnostic-table th {
-            background: #f8f9fa;
+            background: #f8fafc;
             font-weight: 600;
         }
+
         .status-badge {
-            padding: 6px 12px;
-            border-radius: 15px;
-            font-size: 0.9em;
-            font-weight: 600;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
         }
-        .status-error { background: #fed7d7; color: #9b2c2c; }
-        .status-warning { background: #fef5e7; color: #b7791f; }
-        .status-success { background: #c6f6d5; color: #276749; }
-        .flask-badge {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 15px;
-            font-size: 0.8em;
-            margin-left: 10px;
-        }
+
+        .status-error { background: #fecaca; color: #991b1b; }
+        .status-success { background: #dcfce7; color: #166534; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔧 Database Auto-Repair System</h1>
-            <p>Flask 3.0+ Ultimate Edition Professional Database Recovery & Initialization - FIXED DISPLAY VERSION
-                <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
-            </p>
+            <h1><i class="bi bi-tools"></i> Database Repair System</h1>
+            <p>Modern Flask 3.0+ Professional Database Recovery</p>
         </div>
-        
+
         {% if error_message %}
         <div class="card">
-            <h3 style="color: #e53e3e; margin-bottom: 15px;">❌ Critical Error Detected</h3>
-            <div class="status-info">
-                <strong>Error:</strong> {{ error_message }}
+            <div class="card-header" style="color: var(--danger-color);">
+                <i class="bi bi-exclamation-triangle"></i> Critical Error Detected
+            </div>
+            <div class="card-body">
+                <p><strong>Error:</strong> {{ error_message }}</p>
             </div>
         </div>
         {% endif %}
-        
+
         <div class="card">
-            <h3 style="margin-bottom: 20px;">📊 Flask 3.0+ Ultimate Database Diagnostic Report</h3>
-            
-            <div class="status-info">
-                <p><strong>Flask Version:</strong> 3.0+ Ultimate Compatible - FIXED DISPLAY</p>
+            <div class="card-header">
+                <i class="bi bi-clipboard-data"></i> Database Diagnostic Report
+            </div>
+            <div class="card-body">
                 <p><strong>Initialization Attempts:</strong> {{ initialization_attempts }}</p>
-                <p><strong>Your IP:</strong> {{ current_ip }}</p>
                 <p><strong>Database Type:</strong> {{ db_status.type }}</p>
-                <p><strong>Connection Status:</strong> 
+                <p><strong>Connection Status:</strong>
                     {% if db_status.connection %}
                         <span class="status-badge status-success">Connected</span>
                     {% else %}
                         <span class="status-badge status-error">Disconnected</span>
                     {% endif %}
                 </p>
+
+                <h4 style="margin: 1.5rem 0 1rem 0;">Table Status:</h4>
+                <table class="diagnostic-table">
+                    <thead>
+                        <tr>
+                            <th>Table Name</th>
+                            <th>Status</th>
+                            <th>Columns</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for table_name, table_info in db_status.tables.items() %}
+                        <tr>
+                            <td><strong>{{ table_name }}</strong></td>
+                            <td>
+                                {% if table_info.exists %}
+                                    <span class="status-badge status-success">Exists</span>
+                                {% else %}
+                                    <span class="status-badge status-error">Missing</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ table_info.columns|length if table_info.columns else 0 }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
-            
-            <h4 style="margin: 20px 0 10px 0;">Table Status:</h4>
-            <table class="diagnostic-table">
-                <thead>
-                    <tr>
-                        <th>Table Name</th>
-                        <th>Status</th>
-                        <th>Columns Found</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for table_name, table_info in db_status.tables.items() %}
-                    <tr>
-                        <td><strong>{{ table_name }}</strong></td>
-                        <td>
-                            {% if table_info.exists %}
-                                <span class="status-badge status-success">Exists</span>
-                            {% else %}
-                                <span class="status-badge status-error">Missing</span>
-                            {% endif %}
-                        </td>
-                        <td>{{ table_info.columns|length if table_info.columns else 0 }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            
-            {% if db_status.issues %}
-            <h4 style="margin: 20px 0 10px 0; color: #e53e3e;">⚠️ Issues Detected:</h4>
-            <ul style="margin-left: 20px;">
-                {% for issue in db_status.issues %}
-                <li style="margin: 5px 0; color: #e53e3e;">{{ issue }}</li>
-                {% endfor %}
-            </ul>
-            {% endif %}
         </div>
-        
+
         <div class="card">
-            <h3 style="margin-bottom: 20px;">🛠️ Flask 3.0+ Ultimate Repair Actions</h3>
-            <p style="margin-bottom: 20px; line-height: 1.6;">
-                The Flask 3.0+ Ultimate compatible auto-repair system will completely rebuild the database schema with all required tables, 
-                indexes, and sample data. This is a safe operation that will not affect existing valid data. 
-                <strong>FIXED DISPLAY VERSION</strong> ensures complete license key and hardware ID visibility.
-            </p>
-            
-            <form method="POST" action="/admin/repair-database" style="text-align: center;">
-                <button type="submit" class="btn btn-danger" onclick="return confirm('Proceed with Flask 3.0+ Ultimate database repair? This will recreate all tables.')">
-                    🔧 Execute Database Repair
-                </button>
-            </form>
-            
-            <div style="margin-top: 30px; text-align: center;">
-                <a href="/admin" class="btn">← Back to Admin Panel</a>
-                <a href="/" class="btn">🏠 Home Page</a>
+            <div class="card-header">
+                <i class="bi bi-wrench"></i> Safe Repair Actions
+            </div>
+            <div class="card-body">
+                <p style="margin-bottom: 1.5rem;">
+                    The safe repair system will create missing database tables and indexes while 
+                    <strong>preserving all existing data</strong>. This operation is completely safe 
+                    and will not affect your current licenses or logs.
+                </p>
+                
+                <form method="POST" action="/admin/safe-repair" style="text-align: center;">
+                    <button type="submit" class="btn btn-danger" 
+                            onclick="return confirm('Proceed with safe database repair? Existing data will be preserved.')">
+                        <i class="bi bi-tools"></i>
+                        Execute Safe Repair
+                    </button>
+                </form>
+                
+                <div style="text-align: center; margin-top: 2rem;">
+                    <a href="/admin" class="btn" style="background: #6b7280; color: white;">
+                        <i class="bi bi-arrow-left"></i> Back to Admin
+                    </a>
+                    <a href="/" class="btn" style="background: #059669; color: white;">
+                        <i class="bi bi-house"></i> Home
+                    </a>
+                </div>
             </div>
         </div>
     </div>
@@ -1792,343 +1670,252 @@ REPAIR_HTML = '''
 </html>
 '''
 
-ADMIN_HTML = '''
+MODERN_ADMIN_HTML = '''
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>License Administration Dashboard - Flask 3.0+ Ultimate Edition - FIXED DISPLAY</title>
+    <title>License Admin Dashboard - Modern Edition</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #f7fafc;
-            color: #2d3748;
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #059669;
+            --warning-color: #d97706;
+            --danger-color: #dc2626;
+            --background: #f8fafc;
+            --surface: #ffffff;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --border: #e2e8f0;
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body { 
+            font-family: 'Inter', sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+        }
+
         .container { 
             max-width: 1400px; 
             margin: 0 auto; 
-            padding: 20px; 
+            padding: 1.5rem; 
         }
+
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--primary-color), #1d4ed8);
             color: white;
-            padding: 30px;
-            border-radius: 15px;
-            margin-bottom: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            position: relative;
+            padding: 2rem;
+            border-radius: 1rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 25px rgba(37, 99, 235, 0.15);
         }
-        .header h1 { font-size: 2.2em; margin-bottom: 10px; }
-        .header p { opacity: 0.9; }
-        
-        .repair-status {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-            padding: 15px 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
         }
-        
-        .stats { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
-            gap: 20px; 
-            margin: 30px 0; 
+
+        .stat-box {
+            background: var(--surface);
+            padding: 2rem;
+            border-radius: 1rem;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s;
         }
-        .stat-box { 
-            background: white;
-            padding: 25px; 
-            border-radius: 15px; 
-            text-align: center; 
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-            transition: transform 0.3s ease;
+
+        .stat-box:hover { transform: translateY(-2px); }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
         }
-        .stat-box:hover { transform: translateY(-5px); }
-        .stat-number { 
-            font-size: 2.5em; 
-            font-weight: bold; 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 5px; 
-        }
-        .stat-label { color: #718096; font-weight: 600; }
-        
+
         .card {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
-            margin-bottom: 20px;
+            background: var(--surface);
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 2rem;
             overflow: hidden;
         }
+
         .card-header {
-            background: #f8f9fa;
-            padding: 20px;
-            border-bottom: 1px solid #e2e8f0;
+            background: #f8fafc;
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
             font-weight: 600;
-            font-size: 1.1em;
             display: flex;
-            justify-content: space-between;
+            justify-content: between;
             align-items: center;
         }
-        .card-body { padding: 20px; }
-        
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            font-size: 0.9em;
+
+        .card-body { padding: 1.5rem; }
+
+        .tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            background: var(--surface);
+            padding: 0.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         }
-        th, td { 
-            padding: 12px; 
-            text-align: left; 
-            border-bottom: 1px solid #e2e8f0;
-            word-wrap: break-word;
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background: transparent;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: all 0.2s;
         }
-        th { 
-            background: #f8f9fa;
+
+        .tab.active {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background: #f8fafc;
             font-weight: 600;
-            color: #4a5568;
-            position: sticky;
-            top: 0;
+            color: var(--text-primary);
         }
-        tr:hover { background: #f8f9fa; }
-        
-        .license-key { 
-            font-family: 'Courier New', monospace; 
-            background: #edf2f7; 
-            padding: 4px 8px; 
-            border-radius: 4px; 
-            font-size: 0.85em;
-            font-weight: bold;
-            color: #2d3748;
+
+        tr:hover { background: #f8fafc; }
+
+        .license-key, .hardware-id {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            background: #f1f5f9;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.8rem;
             cursor: pointer;
             position: relative;
             max-width: 200px;
             word-break: break-all;
         }
-        
-        .hardware-id {
-            font-family: 'Courier New', monospace;
-            background: #e6fffa;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.8em;
-            color: #234e52;
-            cursor: pointer;
-            max-width: 150px;
-            word-break: break-all;
-        }
-        
-        .full-display {
-            position: absolute;
-            background: #2d3748;
-            color: white;
-            padding: 8px;
-            border-radius: 4px;
-            font-size: 0.8em;
-            z-index: 1000;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            display: none;
-            top: 100%;
-            left: 0;
-            white-space: nowrap;
-        }
-        
-        .license-key:hover .full-display,
-        .hardware-id:hover .full-display {
-            display: block;
-        }
-        
+
+        .hardware-id { background: #ecfdf5; }
+
         .status-badge {
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
+            padding: 0.25rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
             font-weight: 600;
-            display: inline-block;
         }
-        .active { background: #c6f6d5; color: #276749; }
-        .inactive { background: #fed7d7; color: #9b2c2c; }
-        .expired { background: #fef5e7; color: #b7791f; }
-        
-        .btn { 
-            background: #667eea;
-            color: white; 
-            padding: 8px 16px; 
-            border: none; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            text-decoration: none; 
-            display: inline-block; 
-            margin: 2px;
-            font-size: 0.9em;
+
+        .active { background: #dcfce7; color: #166534; }
+        .inactive { background: #fecaca; color: #991b1b; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 0.875rem;
             font-weight: 500;
-            transition: all 0.2s ease;
+            transition: all 0.2s;
+            margin: 0.125rem;
         }
-        .btn:hover { 
-            background: #5a67d8;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-        }
-        .btn-danger { background: #e53e3e; }
-        .btn-danger:hover { background: #c53030; }
-        .btn-warning { background: #ed8936; }
-        .btn-warning:hover { background: #dd6b20; }
-        .btn-success { background: #48bb78; }
-        .btn-success:hover { background: #38a169; }
-        .btn-repair { 
-            background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);
-            padding: 10px 20px;
-            font-weight: 600;
-            box-shadow: 0 4px 15px rgba(229, 62, 62, 0.3);
-        }
-        .btn-repair:hover {
-            box-shadow: 0 6px 20px rgba(229, 62, 62, 0.5);
-        }
-        
-        .form-group { margin: 20px 0; }
-        .form-group label { 
-            display: block; 
-            margin-bottom: 8px; 
-            font-weight: 600; 
-            color: #4a5568;
-        }
-        .form-group input, .form-group select { 
-            width: 100%; 
-            padding: 10px; 
-            border: 2px solid #e2e8f0; 
-            border-radius: 8px; 
-            font-size: 1em;
-            transition: border 0.2s ease;
-        }
-        .form-group input:focus, .form-group select:focus { 
-            border-color: #667eea; 
-            outline: none; 
-        }
-        
-        .tabs { 
-            display: flex; 
-            margin-bottom: 20px;
-            background: white;
-            border-radius: 10px;
-            padding: 5px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        .tab { 
-            padding: 12px 24px; 
-            background: transparent;
-            border: none; 
-            cursor: pointer; 
-            border-radius: 8px;
-            margin: 0 2px;
-            font-weight: 500;
-            color: #718096;
-            transition: all 0.2s ease;
-        }
-        .tab:hover { background: #f8f9fa; }
-        .tab.active { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; 
-        }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        
-        .flash { 
-            padding: 15px 20px; 
-            margin: 20px 0; 
-            border-radius: 8px;
+
+        .btn-primary { background: var(--primary-color); color: white; }
+        .btn-success { background: var(--success-color); color: white; }
+        .btn-warning { background: var(--warning-color); color: white; }
+        .btn-danger { background: var(--danger-color); color: white; }
+
+        .btn:hover { transform: translateY(-1px); opacity: 0.9; }
+
+        .form-group { margin: 1rem 0; }
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
             font-weight: 500;
         }
-        .flash.success { 
-            background: #c6f6d5; 
-            color: #276749;
-            border: 1px solid #9ae6b4;
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 0.5rem;
+            font-size: 1rem;
         }
-        .flash.error { 
-            background: #fed7d7; 
-            color: #9b2c2c;
-            border: 1px solid #feb2b2;
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
         }
-        
-        .info-badge {
-            background: #e6fffa;
-            color: #234e52;
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-size: 0.85em;
-            margin-left: 10px;
+
+        .flash {
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 0.5rem;
+            font-weight: 500;
         }
-        
-        .flask-badge {
-            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-size: 0.85em;
-            margin-left: 10px;
+
+        .flash.success {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #bbf7d0;
         }
-        
-        .fixed-badge {
-            background: linear-gradient(135deg, #9f7aea 0%, #805ad5 100%);
-            color: white;
-            padding: 6px 12px;
-            border-radius: 6px;
-            font-size: 0.85em;
-            margin-left: 10px;
+
+        .flash.error {
+            background: #fecaca;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
         }
-        
+
         .action-buttons {
             display: flex;
-            gap: 5px;
+            gap: 0.25rem;
             flex-wrap: wrap;
         }
-        
+
         @media (max-width: 768px) {
+            .container { padding: 1rem; }
             .stats { grid-template-columns: 1fr; }
-            table { font-size: 0.8em; }
-            th, td { padding: 8px; }
             .tabs { flex-wrap: wrap; }
-            .tab { font-size: 0.9em; padding: 10px 16px; }
+            table { font-size: 0.75rem; }
+            th, td { padding: 0.5rem; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔐 License Administration Dashboard</h1>
-            <p>
-                Flask 3.0+ Ultimate Edition Professional Auto-Repair Edition - FIXED DISPLAY VERSION • Current Session IP: {{ current_ip }}
-                <span class="info-badge">
-                    Database: {% if is_postgresql %}PostgreSQL (Render){% else %}SQLite (Local){% endif %}
-                </span>
-                <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
-                <span class="fixed-badge">📱 Full Display Fixed</span>
-                <span class="info-badge">
-                    🌍 {{ render_url }}
-                </span>
-            </p>
+            <h1><i class="bi bi-shield-lock"></i> License Administration Dashboard</h1>
+            <p>Modern Flask 3.0+ Professional Edition • IP: {{ current_ip }} • Database: {% if is_postgresql %}PostgreSQL{% else %}SQLite{% endif %}</p>
         </div>
-        
-        <div class="repair-status">
-            <div>
-                <strong>🔧 Flask 3.0+ Ultimate Auto-Repair Status:</strong> 
-                {% if database_initialized %}
-                    ✅ Database Operational ({{ initialization_attempts }} attempts) - FIXED DISPLAY ACTIVE
-                {% else %}
-                    ⚠️ Database Needs Repair ({{ initialization_attempts }} attempts)
-                {% endif %}
-            </div>
-            <form method="POST" action="/admin/repair-database" style="margin: 0;">
-                <button type="submit" class="btn btn-repair" 
-                        onclick="return confirm('Execute Flask 3.0+ Ultimate database repair? This will recreate all tables safely.')">
-                    🔧 Force Database Repair
-                </button>
-            </form>
-        </div>
-        
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -2136,7 +1923,7 @@ ADMIN_HTML = '''
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        
+
         <div class="stats">
             <div class="stat-box">
                 <div class="stat-number">{{ stats.total_licenses }}</div>
@@ -2151,25 +1938,30 @@ ADMIN_HTML = '''
                 <div class="stat-label">Valid & Current</div>
             </div>
         </div>
-        
+
         <div class="tabs">
-            <button class="tab active" onclick="showTab('licenses')">📋 Licenses</button>
-            <button class="tab" onclick="showTab('create')">➕ Create License</button>
-            <button class="tab" onclick="showTab('logs')">📊 Activity Logs</button>
-            <button class="tab" onclick="showTab('admin-logs')">👨‍💼 Admin Access</button>
-            <button class="tab" onclick="showTab('diagnostics')">🔧 Diagnostics</button>
+            <button class="tab active" onclick="showTab('licenses')">
+                <i class="bi bi-list-ul"></i> Licenses
+            </button>
+            <button class="tab" onclick="showTab('create')">
+                <i class="bi bi-plus-circle"></i> Create License
+            </button>
+            <button class="tab" onclick="showTab('activity')">
+                <i class="bi bi-activity"></i> Activity Logs
+            </button>
+            <button class="tab" onclick="showTab('diagnostics')">
+                <i class="bi bi-wrench"></i> Diagnostics
+            </button>
         </div>
-        
+
         <!-- Licenses Tab -->
         <div id="licenses" class="tab-content active">
             <div class="card">
                 <div class="card-header">
-                    📋 License Management - FIXED DISPLAY VERSION
-                    <div>
-                        <span class="info-badge">Total: {{ licenses|length }}</span>
-                        <span class="flask-badge">⚡ Flask 3.0+ Ultimate</span>
-                        <span class="fixed-badge">📱 Full Display</span>
-                    </div>
+                    <span><i class="bi bi-list-ul"></i> License Management</span>
+                    <span style="background: #e0e7ff; color: #3730a3; padding: 0.25rem 0.75rem; border-radius: 0.375rem; font-size: 0.875rem;">
+                        Total: {{ licenses|length }}
+                    </span>
                 </div>
                 <div class="card-body" style="overflow-x: auto;">
                     <table>
@@ -2190,9 +1982,8 @@ ADMIN_HTML = '''
                             {% for license in licenses %}
                             <tr>
                                 <td>
-                                    <div class="license-key" style="position: relative;">
+                                    <div class="license-key" title="{{ license.license_key }}">
                                         {{ license.license_key }}
-                                        <div class="full-display">{{ license.license_key }}</div>
                                     </div>
                                 </td>
                                 <td>{{ license.customer_name or '-' }}</td>
@@ -2208,34 +1999,29 @@ ADMIN_HTML = '''
                                 </td>
                                 <td>
                                     {% if license.hardware_id %}
-                                        <div class="hardware-id" style="position: relative;">
+                                        <div class="hardware-id" title="{{ license.hardware_id }}">
                                             {{ license.hardware_id }}
-                                            <div class="full-display">{{ license.hardware_id }}</div>
                                         </div>
                                     {% else %}
-                                        <span style="color: #999;">Unbound</span>
+                                        <span style="color: #9ca3af;">Unbound</span>
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <small>
-                                        Used: {{ license.validation_count or 0 }}x
-                                    </small>
+                                    <small>{{ license.validation_count or 0 }}x</small>
                                 </td>
                                 <td>
                                     <div class="action-buttons">
                                         <form method="POST" style="display: inline;">
                                             <input type="hidden" name="license_key" value="{{ license.license_key }}">
-                                            <button type="submit" formaction="/admin/toggle_license" class="btn btn-warning" 
-                                                    onclick="return confirm('Toggle license status?')">
+                                            <button type="submit" formaction="/admin/toggle_license" class="btn btn-warning">
                                                 {% if license.active %}Disable{% else %}Enable{% endif %}
                                             </button>
                                         </form>
                                         <form method="POST" style="display: inline;">
                                             <input type="hidden" name="license_key" value="{{ license.license_key }}">
                                             <input type="hidden" name="extend_days" value="30">
-                                            <button type="submit" formaction="/admin/extend_license" class="btn btn-success"
-                                                    onclick="return confirm('Extend license by 30 days?')">
-                                                +30 days
+                                            <button type="submit" formaction="/admin/extend_license" class="btn btn-success">
+                                                +30d
                                             </button>
                                         </form>
                                         <form method="POST" style="display: inline;">
@@ -2254,27 +2040,29 @@ ADMIN_HTML = '''
                 </div>
             </div>
         </div>
-        
+
         <!-- Create License Tab -->
         <div id="create" class="tab-content">
             <div class="card">
-                <div class="card-header">➕ Create New License</div>
+                <div class="card-header">
+                    <i class="bi bi-plus-circle"></i> Create New License
+                </div>
                 <div class="card-body">
                     <form method="POST" action="/admin/create_license">
                         <div class="form-group">
-                            <label for="customer_email">📧 Customer Email *</label>
+                            <label for="customer_email"><i class="bi bi-envelope"></i> Customer Email *</label>
                             <input type="email" id="customer_email" name="customer_email" required 
                                    placeholder="customer@example.com">
                         </div>
                         
                         <div class="form-group">
-                            <label for="customer_name">👤 Customer Name</label>
+                            <label for="customer_name"><i class="bi bi-person"></i> Customer Name</label>
                             <input type="text" id="customer_name" name="customer_name" 
                                    placeholder="John Doe (optional)">
                         </div>
                         
                         <div class="form-group">
-                            <label for="duration_days">⏰ License Duration</label>
+                            <label for="duration_days"><i class="bi bi-calendar"></i> License Duration</label>
                             <select id="duration_days" name="duration_days">
                                 <option value="7">7 days (Trial)</option>
                                 <option value="30" selected>30 days (Monthly)</option>
@@ -2283,25 +2071,28 @@ ADMIN_HTML = '''
                             </select>
                         </div>
                         
-                        <button type="submit" class="btn btn-success" style="font-size: 1.1em; padding: 12px 30px;">
-                            🚀 Create License
+                        <button type="submit" class="btn btn-success" style="padding: 0.75rem 2rem;">
+                            <i class="bi bi-plus-circle"></i>
+                            Create License
                         </button>
                     </form>
                 </div>
             </div>
         </div>
-        
+
         <!-- Activity Logs Tab -->
-        <div id="logs" class="tab-content">
+        <div id="activity" class="tab-content">
             <div class="card">
-                <div class="card-header">📊 Recent Validation Activity - FIXED DISPLAY</div>
+                <div class="card-header">
+                    <i class="bi bi-activity"></i> Recent Validation Activity
+                </div>
                 <div class="card-body" style="overflow-x: auto;">
                     <table>
                         <thead>
                             <tr>
                                 <th>Time</th>
-                                <th>License Key (Full)</th>
-                                <th>Hardware ID (Full)</th>
+                                <th>License Key</th>
+                                <th>Hardware ID</th>
                                 <th>Status</th>
                                 <th>IP Address</th>
                             </tr>
@@ -2312,9 +2103,8 @@ ADMIN_HTML = '''
                                 <td>{{ log.timestamp|formatdatetimefull }}</td>
                                 <td>
                                     {% if log.license_key %}
-                                        <div class="license-key" style="position: relative;">
+                                        <div class="license-key" title="{{ log.license_key }}">
                                             {{ log.license_key }}
-                                            <div class="full-display">{{ log.license_key }}</div>
                                         </div>
                                     {% else %}
                                         -
@@ -2322,9 +2112,8 @@ ADMIN_HTML = '''
                                 </td>
                                 <td>
                                     {% if log.hardware_id %}
-                                        <div class="hardware-id" style="position: relative;">
+                                        <div class="hardware-id" title="{{ log.hardware_id }}">
                                             {{ log.hardware_id }}
-                                            <div class="full-display">{{ log.hardware_id }}</div>
                                         </div>
                                     {% else %}
                                         -
@@ -2334,7 +2123,7 @@ ADMIN_HTML = '''
                                     {% if log.status == 'VALID' %}
                                         <span class="status-badge active">✅ Valid</span>
                                     {% elif log.status == 'EXPIRED' %}
-                                        <span class="status-badge expired">⏰ Expired</span>
+                                        <span class="status-badge" style="background: #fef3c7; color: #92400e;">⏰ Expired</span>
                                     {% elif log.status == 'HARDWARE_MISMATCH' %}
                                         <span class="status-badge inactive">🔒 HW Mismatch</span>
                                     {% elif log.status == 'INVALID_KEY' %}
@@ -2351,45 +2140,28 @@ ADMIN_HTML = '''
                 </div>
             </div>
         </div>
-        
-        <!-- Admin Logs Tab -->
-        <div id="admin-logs" class="tab-content">
-            <div class="card">
-                <div class="card-header">👨‍💼 Recent Admin Access</div>
-                <div class="card-body" style="overflow-x: auto;">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Username</th>
-                                <th>IP Address</th>
-                                <th>Login Time</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for login in recent_logins %}
-                            <tr>
-                                <td><strong>{{ login.username }}</strong></td>
-                                <td>{{ login.ip_address }}</td>
-                                <td>{{ login.login_time|formatdatetimefull }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        
+
         <!-- Diagnostics Tab -->
         <div id="diagnostics" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    🔧 Flask 3.0+ Ultimate System Diagnostics - FIXED DISPLAY VERSION
-                    <a href="/health" class="btn btn-success">📊 Full Health Report</a>
+                    <span><i class="bi bi-wrench"></i> System Diagnostics</span>
+                    <div>
+                        <a href="/health" class="btn btn-success">
+                            <i class="bi bi-heart-pulse"></i> Health Report
+                        </a>
+                        <form method="POST" action="/admin/safe-repair" style="display: inline;">
+                            <button type="submit" class="btn btn-warning" 
+                                    onclick="return confirm('Execute safe database repair? This will create missing tables while preserving existing data.')">
+                                <i class="bi bi-tools"></i> Safe Repair
+                            </button>
+                        </form>
+                    </div>
                 </div>
                 <div class="card-body">
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
-                        <div style="background: #f8f9fa; padding: 20px; border-radius: 10px;">
-                            <h4>Database Status</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+                        <div style="background: #f8fafc; padding: 1.5rem; border-radius: 0.75rem;">
+                            <h4><i class="bi bi-database"></i> Database Status</h4>
                             <p><strong>Type:</strong> {{ db_status.type }}</p>
                             <p><strong>Version:</strong> {{ db_status.version }}</p>
                             <p><strong>Connection:</strong> 
@@ -2399,10 +2171,6 @@ ADMIN_HTML = '''
                                     <span class="status-badge inactive">Disconnected</span>
                                 {% endif %}
                             </p>
-                        </div>
-                        
-                        <div style="background: #f8f9fa; padding: 20px; border-radius: 10px;">
-                            <h4>Flask 3.0+ Ultimate Initialization Status</h4>
                             <p><strong>Initialized:</strong> 
                                 {% if database_initialized %}
                                     <span class="status-badge active">Yes</span>
@@ -2410,17 +2178,21 @@ ADMIN_HTML = '''
                                     <span class="status-badge inactive">No</span>
                                 {% endif %}
                             </p>
+                        </div>
+                        
+                        <div style="background: #f8fafc; padding: 1.5rem; border-radius: 0.75rem;">
+                            <h4><i class="bi bi-gear"></i> System Info</h4>
                             <p><strong>Attempts:</strong> {{ initialization_attempts }}</p>
                             <p><strong>Platform:</strong> Render.com</p>
-                            <p><strong>Flask:</strong> 3.0+ Ultimate Compatible</p>
-                            <p><strong>Display:</strong> <span class="status-badge active">Fixed</span></p>
+                            <p><strong>Flask:</strong> 3.0+ Modern</p>
+                            <p><strong>Data Safety:</strong> <span class="status-badge active">Preserved</span></p>
                         </div>
                     </div>
                     
                     {% if db_status.issues %}
-                    <div style="margin-top: 20px; padding: 15px; background: #fed7d7; border-radius: 10px;">
-                        <h4 style="color: #9b2c2c;">⚠️ Issues Detected:</h4>
-                        <ul style="margin-left: 20px; color: #9b2c2c;">
+                    <div style="margin-top: 1.5rem; padding: 1rem; background: #fecaca; border-radius: 0.75rem; border: 1px solid #fca5a5;">
+                        <h4 style="color: #991b1b;"><i class="bi bi-exclamation-triangle"></i> Issues Detected:</h4>
+                        <ul style="margin-left: 1rem; color: #991b1b;">
                             {% for issue in db_status.issues %}
                             <li>{{ issue }}</li>
                             {% endfor %}
@@ -2430,12 +2202,14 @@ ADMIN_HTML = '''
                 </div>
             </div>
         </div>
-        
-        <div style="text-align: center; margin-top: 40px;">
-            <a href="/" class="btn" style="background: #718096;">← Back to Home</a>
+
+        <div style="text-align: center; margin-top: 3rem;">
+            <a href="/" class="btn" style="background: #6b7280; color: white;">
+                <i class="bi bi-arrow-left"></i> Back to Home
+            </a>
         </div>
     </div>
-    
+
     <script>
         function showTab(tabName) {
             // Hide all tab contents
@@ -2471,7 +2245,7 @@ def internal_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
 # =============================================================================
-# MAIN - FLASK 3.0+ ULTIMATE COMPATIBLE
+# MAIN - FLASK 3.0+ COMPATIBLE
 # =============================================================================
 
 if __name__ == '__main__':
