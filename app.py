@@ -3,7 +3,7 @@
 🔐 PRODUCTION PDF LICENSE SERVER - FLASK
 =========================================
 Complete license server with admin panel, hardware locking, and IP tracking
-Version: 4.0.0 - Optimized for Render.com deployment
+Version: 4.1.0 - Fixed for Render.com deployment
 Compatible with PostgreSQL and SQLite (automatic fallback)
 """
 
@@ -50,10 +50,13 @@ except ImportError:
 # Always import sqlite3 as fallback
 import sqlite3
 
-# Logging setup
+# Logging setup with better formatting
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -82,13 +85,16 @@ def init_db():
     """Initialize the database with proper schema"""
     logger.info("Starting database initialization...")
     
+    conn = None
     try:
         conn = get_db_connection()
         
         if DATABASE_URL and PSYCOPG2_AVAILABLE and isinstance(conn, psycopg2.extensions.connection):
             # PostgreSQL schema
             logger.info("Initializing PostgreSQL database...")
-            with conn.cursor() as cur:
+            cur = conn.cursor()
+            
+            try:
                 # Create licenses table
                 cur.execute('''
                     CREATE TABLE IF NOT EXISTS licenses (
@@ -133,20 +139,31 @@ def init_db():
                     )
                 ''')
                 
+                # Commit the table creation
+                conn.commit()
+                logger.info("Tables created successfully")
+                
                 # Create indexes for better performance
                 indexes = [
-                    'CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)',
-                    'CREATE INDEX IF NOT EXISTS idx_licenses_email ON licenses(customer_email)',
-                    'CREATE INDEX IF NOT EXISTS idx_licenses_expiry ON licenses(expiry_date)',
-                    'CREATE INDEX IF NOT EXISTS idx_validation_logs_timestamp ON validation_logs(timestamp)',
-                    'CREATE INDEX IF NOT EXISTS idx_validation_logs_license ON validation_logs(license_key)'
+                    ('idx_licenses_key', 'licenses', 'license_key'),
+                    ('idx_licenses_email', 'licenses', 'customer_email'),
+                    ('idx_licenses_expiry', 'licenses', 'expiry_date'),
+                    ('idx_validation_logs_timestamp', 'validation_logs', 'timestamp'),
+                    ('idx_validation_logs_license', 'validation_logs', 'license_key')
                 ]
                 
-                for index_query in indexes:
-                    cur.execute(index_query)
+                for index_name, table_name, column_name in indexes:
+                    try:
+                        cur.execute(f'CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}({column_name})')
+                        logger.info(f"Created index {index_name}")
+                    except Exception as e:
+                        logger.warning(f"Index {index_name} may already exist: {e}")
                 
                 conn.commit()
                 logger.info("PostgreSQL database initialized successfully")
+                
+            finally:
+                cur.close()
                     
         else:
             # SQLite schema for local development or fallback
@@ -206,6 +223,8 @@ def init_db():
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         logger.exception("Full traceback:")
+        if conn:
+            conn.rollback()
         raise
     finally:
         if conn:
@@ -244,7 +263,7 @@ def is_postgresql():
 def get_client_ip():
     """Get client IP address, handling proxies"""
     if request.environ.get('HTTP_X_FORWARDED_FOR') is not None:
-        return request.environ['HTTP_X_FORWARDED_FOR'].split(',')[0]
+        return request.environ['HTTP_X_FORWARDED_FOR'].split(',')[0].strip()
     elif request.environ.get('HTTP_X_REAL_IP') is not None:
         return request.environ['HTTP_X_REAL_IP']
     else:
@@ -254,21 +273,23 @@ def log_validation(license_key, hardware_id, status, ip_address, user_agent=None
     """Log validation attempt"""
     try:
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('''
-                    INSERT INTO validation_logs (license_key, hardware_id, status, ip_address, user_agent, details)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                ''', (license_key, hardware_id, status, ip_address, user_agent, 
-                      json.dumps(details) if details else None))
+            cur.execute('''
+                INSERT INTO validation_logs (license_key, hardware_id, status, ip_address, user_agent, details)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (license_key, hardware_id, status, ip_address, user_agent, 
+                  json.dumps(details) if details else None))
         else:
-            cur = conn.cursor()
             cur.execute('''
                 INSERT INTO validation_logs (license_key, hardware_id, timestamp, status, ip_address, user_agent, details)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (license_key, hardware_id, datetime.now().isoformat(), status, ip_address, user_agent,
                   json.dumps(details) if details else None))
+        
         conn.commit()
+        cur.close()
         conn.close()
     except Exception as e:
         logger.error(f"Failed to log validation: {e}")
@@ -278,19 +299,21 @@ def log_admin_session(username, ip_address):
     try:
         session_id = secrets.token_urlsafe(32)
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('''
-                    INSERT INTO admin_sessions (session_id, username, ip_address)
-                    VALUES (%s, %s, %s)
-                ''', (session_id, username, ip_address))
+            cur.execute('''
+                INSERT INTO admin_sessions (session_id, username, ip_address)
+                VALUES (%s, %s, %s)
+            ''', (session_id, username, ip_address))
         else:
-            cur = conn.cursor()
             cur.execute('''
                 INSERT INTO admin_sessions (session_id, username, ip_address, login_time)
                 VALUES (?, ?, ?, ?)
             ''', (session_id, username, ip_address, datetime.now().isoformat()))
+        
         conn.commit()
+        cur.close()
         conn.close()
         return session_id
     except Exception as e:
@@ -305,22 +328,24 @@ def create_license(customer_email, customer_name=None, duration_days=30, created
     
     try:
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('''
-                    INSERT INTO licenses (license_key, customer_email, customer_name, 
-                                        expiry_date, created_by)
-                    VALUES (%s, %s, %s, %s, %s)
-                ''', (license_key, customer_email, customer_name, expiry_date, created_by))
+            cur.execute('''
+                INSERT INTO licenses (license_key, customer_email, customer_name, 
+                                    expiry_date, created_by)
+                VALUES (%s, %s, %s, %s, %s)
+            ''', (license_key, customer_email, customer_name, expiry_date, created_by))
         else:
-            cur = conn.cursor()
             cur.execute('''
                 INSERT INTO licenses (license_key, customer_email, customer_name, 
                                     created_date, expiry_date, created_by)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (license_key, customer_email, customer_name, 
                   created_date.isoformat(), expiry_date.isoformat(), created_by))
+        
         conn.commit()
+        cur.close()
         conn.close()
         
         return {
@@ -377,12 +402,13 @@ def validate_license():
         conn = get_db_connection()
         try:
             if is_postgresql():
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        'SELECT * FROM licenses WHERE license_key = %s AND active = true',
-                        (license_key,)
-                    )
-                    license_row = cur.fetchone()
+                cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                cur.execute(
+                    'SELECT * FROM licenses WHERE license_key = %s AND active = true',
+                    (license_key,)
+                )
+                license_row = cur.fetchone()
+                cur.close()
             else:
                 cur = conn.cursor()
                 license_row = cur.execute(
@@ -417,16 +443,16 @@ def validate_license():
             # Hardware binding logic
             stored_hardware_id = license_row['hardware_id']
             
+            cur = conn.cursor()
+            
             if not stored_hardware_id:
                 # First time binding - bind to this hardware
                 if is_postgresql():
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            'UPDATE licenses SET hardware_id = %s, last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
-                            (hardware_id, datetime.now(), license_key)
-                        )
+                    cur.execute(
+                        'UPDATE licenses SET hardware_id = %s, last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
+                        (hardware_id, datetime.now(), license_key)
+                    )
                 else:
-                    cur = conn.cursor()
                     cur.execute(
                         'UPDATE licenses SET hardware_id = ?, last_used = ?, validation_count = validation_count + 1 WHERE license_key = ?',
                         (hardware_id, datetime.now().isoformat(), license_key)
@@ -438,6 +464,7 @@ def validate_license():
                 # Hardware mismatch - license is locked to different hardware
                 log_validation(license_key, hardware_id, 'HARDWARE_MISMATCH', client_ip, user_agent, 
                              {'expected': stored_hardware_id, 'provided': hardware_id})
+                cur.close()
                 return jsonify({
                     "valid": False,
                     "reason": "License is locked to a different computer",
@@ -446,19 +473,19 @@ def validate_license():
             else:
                 # Valid hardware - update last used
                 if is_postgresql():
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            'UPDATE licenses SET last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
-                            (datetime.now(), license_key)
-                        )
+                    cur.execute(
+                        'UPDATE licenses SET last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
+                        (datetime.now(), license_key)
+                    )
                 else:
-                    cur = conn.cursor()
                     cur.execute(
                         'UPDATE licenses SET last_used = ?, validation_count = validation_count + 1 WHERE license_key = ?',
                         (datetime.now().isoformat(), license_key)
                     )
                 conn.commit()
                 log_validation(license_key, hardware_id, 'VALID', client_ip, user_agent)
+            
+            cur.close()
             
             days_remaining = (expiry_date - current_date).days
             
@@ -490,24 +517,27 @@ def health_check():
     try:
         # Test database connection
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('SELECT 1')
-                result = cur.fetchone()
+            cur.execute('SELECT 1')
+            result = cur.fetchone()
             db_type = "PostgreSQL"
         else:
-            cur = conn.cursor()
             cur.execute('SELECT 1')
             result = cur.fetchone()
             db_type = "SQLite"
+        
+        cur.close()
         conn.close()
         
         return jsonify({
             "status": "healthy",
-            "version": "4.0.0",
+            "version": "4.1.0",
             "timestamp": datetime.now().isoformat(),
             "database": db_type,
             "database_connected": result is not None,
+            "database_url_set": DATABASE_URL is not None,
             "psycopg2_available": PSYCOPG2_AVAILABLE,
             "python_version": sys.version
         })
@@ -538,49 +568,52 @@ def admin():
     
     try:
         conn = get_db_connection()
+        cur = conn.cursor()
         
         if is_postgresql():
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                # Get all licenses
-                cur.execute('''
-                    SELECT license_key, customer_email, customer_name, created_date, 
-                           expiry_date, active, last_used, validation_count, hardware_id, created_by
-                    FROM licenses 
-                    ORDER BY created_date DESC
-                    LIMIT 100
-                ''')
-                licenses = cur.fetchall()
-                
-                # Get statistics
-                cur.execute('''
-                    SELECT 
-                        COUNT(*) as total_licenses,
-                        COUNT(CASE WHEN active = true THEN 1 END) as active_licenses,
-                        COUNT(CASE WHEN expiry_date > NOW() AND active = true THEN 1 END) as valid_licenses
-                    FROM licenses
-                ''')
-                stats = cur.fetchone()
-                
-                # Get recent admin logins
-                cur.execute('''
-                    SELECT username, ip_address, login_time 
-                    FROM admin_sessions 
-                    ORDER BY login_time DESC 
-                    LIMIT 10
-                ''')
-                recent_logins = cur.fetchall()
-                
-                # Get recent validation attempts
-                cur.execute('''
-                    SELECT license_key, hardware_id, status, ip_address, timestamp
-                    FROM validation_logs 
-                    ORDER BY timestamp DESC 
-                    LIMIT 20
-                ''')
-                recent_validations = cur.fetchall()
-                
+            # Use dictionary cursor for PostgreSQL
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            # Get all licenses
+            cur.execute('''
+                SELECT license_key, customer_email, customer_name, created_date, 
+                       expiry_date, active, last_used, validation_count, hardware_id, created_by
+                FROM licenses 
+                ORDER BY created_date DESC
+                LIMIT 100
+            ''')
+            licenses = cur.fetchall()
+            
+            # Get statistics
+            cur.execute('''
+                SELECT 
+                    COUNT(*) as total_licenses,
+                    COUNT(CASE WHEN active = true THEN 1 END) as active_licenses,
+                    COUNT(CASE WHEN expiry_date > NOW() AND active = true THEN 1 END) as valid_licenses
+                FROM licenses
+            ''')
+            stats = cur.fetchone()
+            
+            # Get recent admin logins
+            cur.execute('''
+                SELECT username, ip_address, login_time 
+                FROM admin_sessions 
+                ORDER BY login_time DESC 
+                LIMIT 10
+            ''')
+            recent_logins = cur.fetchall()
+            
+            # Get recent validation attempts
+            cur.execute('''
+                SELECT license_key, hardware_id, status, ip_address, timestamp
+                FROM validation_logs 
+                ORDER BY timestamp DESC 
+                LIMIT 20
+            ''')
+            recent_validations = cur.fetchall()
+            
         else:
-            cur = conn.cursor()
+            # SQLite queries
             licenses = cur.execute('''
                 SELECT license_key, customer_email, customer_name, created_date, 
                        expiry_date, active, last_used, validation_count, hardware_id, created_by
@@ -611,6 +644,7 @@ def admin():
                 LIMIT 20
             ''').fetchall()
         
+        cur.close()
         conn.close()
         
         return render_template_string(ADMIN_HTML, 
@@ -661,13 +695,15 @@ def delete_license():
         license_key = request.form.get('license_key')
         
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('DELETE FROM licenses WHERE license_key = %s', (license_key,))
+            cur.execute('DELETE FROM licenses WHERE license_key = %s', (license_key,))
         else:
-            cur = conn.cursor()
             cur.execute('DELETE FROM licenses WHERE license_key = ?', (license_key,))
+        
         conn.commit()
+        cur.close()
         conn.close()
         
         flash(f'License {license_key} deleted successfully', 'success')
@@ -686,13 +722,15 @@ def toggle_license():
         license_key = request.form.get('license_key')
         
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('UPDATE licenses SET active = NOT active WHERE license_key = %s', (license_key,))
+            cur.execute('UPDATE licenses SET active = NOT active WHERE license_key = %s', (license_key,))
         else:
-            cur = conn.cursor()
             cur.execute('UPDATE licenses SET active = NOT active WHERE license_key = ?', (license_key,))
+        
         conn.commit()
+        cur.close()
         conn.close()
         
         flash(f'License {license_key} status toggled', 'success')
@@ -712,15 +750,15 @@ def extend_license():
         extend_days = int(request.form.get('extend_days', 30))
         
         conn = get_db_connection()
+        cur = conn.cursor()
+        
         if is_postgresql():
-            with conn.cursor() as cur:
-                cur.execute('''
-                    UPDATE licenses 
-                    SET expiry_date = expiry_date + INTERVAL '%s days'
-                    WHERE license_key = %s
-                ''', (extend_days, license_key))
+            cur.execute('''
+                UPDATE licenses 
+                SET expiry_date = expiry_date + INTERVAL '%s days'
+                WHERE license_key = %s
+            ''', (extend_days, license_key))
         else:
-            cur = conn.cursor()
             # For SQLite, we need to fetch current expiry and calculate new date
             result = cur.execute(
                 'SELECT expiry_date FROM licenses WHERE license_key = ?',
@@ -736,6 +774,7 @@ def extend_license():
                 )
         
         conn.commit()
+        cur.close()
         conn.close()
         
         flash(f'License {license_key} extended by {extend_days} days', 'success')
@@ -935,7 +974,7 @@ INDEX_HTML = '''
         </div>
         
         <div style="text-align: center; margin-top: 40px; color: #718096;">
-            <p>PDF License Server v4.0.0 • Optimized for Render.com</p>
+            <p>PDF License Server v4.1.0 • Optimized for Render.com</p>
         </div>
     </div>
 </body>
