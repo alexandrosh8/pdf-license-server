@@ -2,9 +2,8 @@
 🔐 PRODUCTION PDF LICENSE SERVER - FLASK
 =========================================
 Complete license server with admin panel, hardware locking, and IP tracking
-
-Version: 2.2.0
-Compatible with Render.com deployment and PostgreSQL
+Version: 3.0.0 - Fixed for Render.com deployment
+Compatible with PostgreSQL and SQLite (automatic fallback)
 """
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash
@@ -16,8 +15,6 @@ from datetime import datetime, timedelta
 import os
 import logging
 from contextlib import contextmanager
-import psycopg2
-import psycopg2.extras
 from urllib.parse import urlparse
 
 # =============================================================================
@@ -28,13 +25,27 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_urlsafe(32))
 
 # Admin credentials
-ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'Admin')
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'changeme123')
 
 # Database configuration
 DATABASE_URL = os.environ.get('DATABASE_URL')
-if DATABASE_URL and DATABASE_URL.startswith('postgresql://'):
-    DATABASE_URL = DATABASE_URL.replace('postgresql://', 'postgres://', 1)
+
+# Fix for Render's postgres:// to postgresql:// 
+if DATABASE_URL and DATABASE_URL.startswith('postgres://'):
+    DATABASE_URL = DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+
+# Try to import psycopg2, but don't fail if it's not available
+PSYCOPG2_AVAILABLE = False
+try:
+    import psycopg2
+    import psycopg2.extras
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    pass
+
+# Always import sqlite3 as fallback
+import sqlite3
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -52,23 +63,20 @@ def get_db_connection():
             return psycopg2.connect(DATABASE_URL)
         except Exception as e:
             logger.error(f"PostgreSQL connection failed: {e}, falling back to SQLite")
-            # Fall back to SQLite on any PostgreSQL error
-            import sqlite3
             conn = sqlite3.connect('licenses.db')
             conn.row_factory = sqlite3.Row
             return conn
     else:
         # SQLite for local development or when psycopg2 not available
-        import sqlite3
         conn = sqlite3.connect('licenses.db')
         conn.row_factory = sqlite3.Row
         return conn
 
 def init_db():
-    """Initialize the license database with proper schema"""
+    """Initialize the database with proper schema"""
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if DATABASE_URL and PSYCOPG2_AVAILABLE and isinstance(conn, psycopg2.extensions.connection):
                 # PostgreSQL schema
                 with conn.cursor() as cur:
                     cur.execute('''
@@ -183,11 +191,18 @@ def generate_license_key():
         segments.append(segment)
     return f"SLIC-{'-'.join(segments)}"
 
+def is_postgresql():
+    """Check if we're using PostgreSQL"""
+    conn = get_db_connection()
+    is_pg = DATABASE_URL and PSYCOPG2_AVAILABLE and isinstance(conn, psycopg2.extensions.connection)
+    conn.close()
+    return is_pg
+
 def log_validation(license_key, hardware_id, status, ip_address, user_agent=None, details=None):
     """Log validation attempt"""
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO validation_logs (license_key, hardware_id, status, ip_address, user_agent, details)
@@ -210,7 +225,7 @@ def log_admin_session(username, ip_address):
     try:
         session_id = secrets.token_urlsafe(32)
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO admin_sessions (session_id, username, ip_address)
@@ -236,7 +251,7 @@ def create_license(customer_email, customer_name=None, duration_days=30, created
     
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 with conn.cursor() as cur:
                     cur.execute('''
                         INSERT INTO licenses (license_key, customer_email, customer_name, 
@@ -274,7 +289,7 @@ def validate_license():
         data = request.get_json()
         license_key = data.get('license_key')
         hardware_id = data.get('hardware_id')
-        client_ip = request.remote_addr
+        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
         user_agent = request.headers.get('User-Agent')
         
         if not license_key:
@@ -290,7 +305,7 @@ def validate_license():
             }), 400
         
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         'SELECT * FROM licenses WHERE license_key = %s AND active = true',
@@ -312,7 +327,7 @@ def validate_license():
                 }), 400
             
             # Check expiration
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 expiry_date = license_row['expiry_date']
                 current_date = datetime.now(expiry_date.tzinfo if expiry_date.tzinfo else None)
             else:
@@ -324,7 +339,7 @@ def validate_license():
                 return jsonify({
                     "valid": False,
                     "reason": "License expired",
-                    "expired_date": license_row['expiry_date'],
+                    "expired_date": str(expiry_date),
                     "renewal_url": f"{request.host_url}renew/{license_key}"
                 }), 400
             
@@ -333,13 +348,14 @@ def validate_license():
             
             if not stored_hardware_id:
                 # First time binding - bind to this hardware
-                if DATABASE_URL and PSYCOPG2_AVAILABLE:
+                if is_postgresql():
                     with conn.cursor() as cur:
                         cur.execute(
                             'UPDATE licenses SET hardware_id = %s, last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
                             (hardware_id, datetime.now(), license_key)
                         )
                 else:
+                    cur = conn.cursor()
                     cur.execute(
                         'UPDATE licenses SET hardware_id = ?, last_used = ?, validation_count = validation_count + 1 WHERE license_key = ?',
                         (hardware_id, datetime.now().isoformat(), license_key)
@@ -358,13 +374,14 @@ def validate_license():
                 }), 400
             else:
                 # Valid hardware - update last used
-                if DATABASE_URL and PSYCOPG2_AVAILABLE:
+                if is_postgresql():
                     with conn.cursor() as cur:
                         cur.execute(
                             'UPDATE licenses SET last_used = %s, validation_count = validation_count + 1 WHERE license_key = %s',
                             (datetime.now(), license_key)
                         )
                 else:
+                    cur = conn.cursor()
                     cur.execute(
                         'UPDATE licenses SET last_used = ?, validation_count = validation_count + 1 WHERE license_key = ?',
                         (datetime.now().isoformat(), license_key)
@@ -378,7 +395,7 @@ def validate_license():
             return jsonify({
                 "valid": True,
                 "message": "License is valid",
-                "expiry_date": expiry_date.isoformat() if DATABASE_URL else license_row['expiry_date'],
+                "expiry_date": expiry_date.isoformat() if is_postgresql() else license_row['expiry_date'],
                 "days_remaining": max(0, days_remaining),
                 "customer_email": license_row['customer_email'],
                 "validation_count": license_row['validation_count'] + 1,
@@ -399,7 +416,7 @@ def health_check():
     try:
         # Test database connection
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 with conn.cursor() as cur:
                     cur.execute('SELECT 1')
                 db_type = "PostgreSQL"
@@ -410,10 +427,11 @@ def health_check():
         
         return jsonify({
             "status": "healthy",
-            "version": "2.2.0",
+            "version": "3.0.0",
             "timestamp": datetime.now().isoformat(),
             "database": db_type,
-            "psycopg2_available": PSYCOPG2_AVAILABLE
+            "psycopg2_available": PSYCOPG2_AVAILABLE,
+            "python_version": os.environ.get('PYTHON_VERSION', 'not set')
         })
     except Exception as e:
         return jsonify({
@@ -438,27 +456,16 @@ def admin():
     auth = request.authorization
     
     if not auth or auth.username != ADMIN_USERNAME or auth.password != ADMIN_PASSWORD:
-        return '''<script>
-            const credentials = prompt("Enter admin credentials (username:password):");
-            if (credentials) {
-                const [username, password] = credentials.split(":");
-                if (username === "''' + ADMIN_USERNAME + '''" && password === "''' + ADMIN_PASSWORD + '''") {
-                    location.reload();
-                } else {
-                    alert("Invalid credentials!");
-                    history.back();
-                }
-            } else {
-                history.back();
-            }
-        </script>''', 401, {'WWW-Authenticate': 'Basic realm="Admin Login Required"'}
+        return 'Login Required', 401, {
+            'WWW-Authenticate': 'Basic realm="Admin Login Required"'
+        }
     
     # Log admin access
-    log_admin_session(auth.username, request.remote_addr)
+    log_admin_session(auth.username, request.headers.get('X-Forwarded-For', request.remote_addr))
     
     try:
         with get_db_connection() as conn:
-            if DATABASE_URL and PSYCOPG2_AVAILABLE:
+            if is_postgresql():
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     # Get all licenses
                     cur.execute('''
@@ -533,7 +540,7 @@ def admin():
                                     stats=stats, 
                                     recent_logins=recent_logins,
                                     recent_validations=recent_validations,
-                                    current_ip=request.remote_addr)
+                                    current_ip=request.headers.get('X-Forwarded-For', request.remote_addr))
     except Exception as e:
         logger.error(f"Admin panel error: {e}")
         return f"Admin panel error: {e}", 500
@@ -573,7 +580,7 @@ def delete_license():
         license_key = request.form.get('license_key')
         
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if is_postgresql():
                 with conn.cursor() as cur:
                     cur.execute('DELETE FROM licenses WHERE license_key = %s', (license_key,))
             else:
@@ -599,7 +606,7 @@ def toggle_license():
         license_key = request.form.get('license_key')
         
         with get_db_connection() as conn:
-            if DATABASE_URL:
+            if is_postgresql():
                 with conn.cursor() as cur:
                     cur.execute('UPDATE licenses SET active = NOT active WHERE license_key = %s', (license_key,))
             else:
@@ -773,8 +780,8 @@ ADMIN_HTML = '''
                         <td><span class="license-key">{{ license.license_key }}</span></td>
                         <td>{{ license.customer_name or 'N/A' }}</td>
                         <td>{{ license.customer_email }}</td>
-                        <td>{{ license.created_date[:10] if license.created_date else 'N/A' }}</td>
-                        <td>{{ license.expiry_date[:10] if license.expiry_date else 'N/A' }}</td>
+                        <td>{{ license.created_date.strftime('%Y-%m-%d') if license.created_date else 'N/A' }}</td>
+                        <td>{{ license.expiry_date.strftime('%Y-%m-%d') if license.expiry_date else 'N/A' }}</td>
                         <td>
                             {% if license.active %}
                                 <span class="active">● Active</span>
@@ -792,7 +799,11 @@ ADMIN_HTML = '''
                         <td>
                             <small>
                                 Count: {{ license.validation_count or 0 }}<br>
-                                Last: {{ license.last_used[:10] if license.last_used else 'Never' }}
+                                {% if license.last_used %}
+                                    Last: {{ license.last_used.strftime('%Y-%m-%d') if hasattr(license.last_used, 'strftime') else license.last_used[:10] }}
+                                {% else %}
+                                    Last: Never
+                                {% endif %}
                             </small>
                         </td>
                         <td><small>{{ license.created_by or 'system' }}</small></td>
@@ -859,7 +870,13 @@ ADMIN_HTML = '''
                 <tbody>
                     {% for log in recent_validations %}
                     <tr>
-                        <td>{{ log.timestamp[:19] if log.timestamp else 'N/A' }}</td>
+                        <td>
+                            {% if log.timestamp %}
+                                {{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if hasattr(log.timestamp, 'strftime') else log.timestamp[:19] }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
                         <td><span class="license-key">{{ log.license_key[:20] if log.license_key else 'N/A' }}...</span></td>
                         <td><code style="font-size: 10px;">{{ log.hardware_id[:16] if log.hardware_id else 'N/A' }}...</code></td>
                         <td>
@@ -896,7 +913,13 @@ ADMIN_HTML = '''
                     <tr>
                         <td><strong>{{ login.username }}</strong></td>
                         <td>{{ login.ip_address }}</td>
-                        <td>{{ login.login_time[:19] if login.login_time else 'N/A' }}</td>
+                        <td>
+                            {% if login.login_time %}
+                                {{ login.login_time.strftime('%Y-%m-%d %H:%M:%S') if hasattr(login.login_time, 'strftime') else login.login_time[:19] }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
