@@ -2175,13 +2175,13 @@ ADMIN_HTML = '''
                     <table>
                         <thead>
                             <tr>
-                                <th>License Key (Full)</th>
+                                <th>License Key</th>
                                 <th>Customer</th>
                                 <th>Email</th>
                                 <th>Created</th>
                                 <th>Expires</th>
                                 <th>Status</th>
-                                <th>Hardware ID (Full)</th>
+                                <th>Hardware ID</th>
                                 <th>Usage</th>
                                 <th>Actions</th>
                             </tr>
