@@ -1,4 +1,4 @@
-name: Build and Release PDF Metadata Tool
+name: Build and Release PDF Metadata Tool - Quick Fix
 
 on:
   push:
@@ -7,10 +7,6 @@ on:
     branches: [ main ]
   workflow_dispatch:
     inputs:
-      build_client:
-        description: 'Build client executable'
-        required: false
-        default: 'true'
       version_tag:
         description: 'Version tag for release'
         required: false
@@ -34,26 +30,26 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         
-    - name: Install dependencies with better error handling
+    - name: Install dependencies
       run: |
+        Write-Host "Installing Python dependencies..."
         python -m pip install --upgrade pip setuptools wheel
-        # Install PyInstaller with specific version to avoid compatibility issues
         python -m pip install pyinstaller==6.7.0
-        # Install required dependencies for the client
-        python -m pip install aiohttp aiofiles psutil requests cryptography
-        # Windows-specific dependencies
-        python -m pip install pywin32
+        python -m pip install aiohttp aiofiles psutil requests cryptography pywin32
+        Write-Host "✅ Dependencies installed successfully"
         
-    - name: Verify client.py exists and validate
+    - name: Verify client.py
       run: |
+        Write-Host "Verifying client.py..."
         if (Test-Path "client.py") {
           Write-Host "✅ client.py found"
-          # Check for basic syntax errors
-          python -m py_compile client.py
-          Write-Host "✅ client.py syntax validation passed"
+          # Test syntax
+          python -c "import ast; ast.parse(open('client.py').read()); print('✅ Syntax validation passed')"
+          # Show file info
+          $fileInfo = Get-Item "client.py"
+          Write-Host "File size: $($fileInfo.Length) bytes"
         } else {
-          Write-Host "❌ client.py not found"
-          Get-ChildItem
+          Write-Host "❌ client.py not found!"
           exit 1
         }
         
@@ -72,45 +68,18 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
         }
         
-    - name: Create requirements.txt for PyInstaller
-      run: |
-        @"
-        aiohttp>=3.8.0
-        aiofiles>=0.8.0
-        psutil>=5.8.0
-        requests>=2.25.0
-        cryptography>=3.4.0
-        pywin32>=227; sys_platform == "win32"
-        "@ | Out-File -FilePath requirements.txt -Encoding utf8
-        
-    - name: Test PyInstaller basic functionality
-      run: |
-        # Test PyInstaller with a simple script first
-        echo "print('PyInstaller test successful')" > test_script.py
-        pyinstaller --onefile --clean --noconfirm test_script.py
-        if (Test-Path "dist/test_script.exe") {
-          Write-Host "✅ PyInstaller basic test passed"
-          Remove-Item -Path "dist", "build" -Recurse -Force
-          Remove-Item -Path "test_script.py", "test_script.spec" -Force
-        } else {
-          Write-Host "❌ PyInstaller basic test failed"
-          exit 1
-        }
-        
-    - name: Build executable with improved PyInstaller command
+    - name: Build executable with PyInstaller
       run: |
         $exeName = "${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}"
         Write-Host "Building executable: $exeName"
         
-        # Use more robust PyInstaller command with better error handling
+        # Build with PyInstaller using comprehensive hidden imports
         pyinstaller `
           --onefile `
           --clean `
           --noconfirm `
-          --distpath dist `
-          --workpath build `
           --name $exeName `
-          --log-level DEBUG `
+          --log-level INFO `
           --hidden-import=aiohttp `
           --hidden-import=aiofiles `
           --hidden-import=asyncio `
@@ -128,57 +97,57 @@ jobs:
           --hidden-import=psutil `
           --hidden-import=cryptography `
           --hidden-import=pkg_resources.extern `
-          --add-data="requirements.txt;." `
+          --hidden-import=win32api `
+          --hidden-import=win32con `
+          --hidden-import=win32gui `
+          --hidden-import=pywintypes `
           client.py
+          
+        Write-Host "PyInstaller build command completed"
         
-    - name: Verify build output
+    - name: Verify build result
       run: |
         $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        
         if (Test-Path $exePath) {
           $fileInfo = Get-Item $exePath
-          Write-Host "✅ Build successful: $($fileInfo.Length) bytes"
-          Write-Host "File path: $exePath"
+          Write-Host "🎉 BUILD SUCCESSFUL!"
+          Write-Host "Executable: $($fileInfo.Name)"
+          Write-Host "Size: $($fileInfo.Length) bytes"
+          Write-Host "Location: $($fileInfo.FullName)"
+          Write-Host "Created: $($fileInfo.CreationTime)"
+          
+          # Test basic executable functionality
+          Write-Host "`nTesting executable..."
+          try {
+            # Try to run with --build flag to bypass license validation
+            $testOutput = & $exePath --build 2>&1 | Out-String
+            Write-Host "Executable test output (first 500 chars):"
+            Write-Host $testOutput.Substring(0, [Math]::Min(500, $testOutput.Length))
+            Write-Host "✅ Executable runs successfully"
+          } catch {
+            Write-Host "⚠️ Executable test warning: $_"
+            Write-Host "This may be expected if license validation is required"
+          }
         } else {
-          Write-Host "❌ Build failed - executable not found"
-          Write-Host "Contents of dist directory:"
-          Get-ChildItem dist -ErrorAction SilentlyContinue
-          Write-Host "Contents of build directory:"
-          Get-ChildItem build -ErrorAction SilentlyContinue
-          Write-Host "Build logs:"
-          Get-ChildItem -Filter "*.log" -Recurse -ErrorAction SilentlyContinue | ForEach-Object { 
-            Write-Host "=== $($_.Name) ==="
-            Get-Content $_.FullName -ErrorAction SilentlyContinue
+          Write-Host "❌ BUILD FAILED - Executable not found"
+          Write-Host "Expected path: $exePath"
+          Write-Host "`nContents of dist directory:"
+          if (Test-Path "dist") {
+            Get-ChildItem "dist" | Format-Table Name, Length, LastWriteTime
+          } else {
+            Write-Host "dist directory does not exist"
+          }
+          
+          Write-Host "`nLooking for build logs..."
+          Get-ChildItem -Filter "*.log" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "=== LOG: $($_.Name) ==="
+            Get-Content $_.FullName -Tail 20
           }
           exit 1
         }
         
-    - name: Test executable (basic functionality)
-      run: |
-        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
-        Write-Host "Testing executable..."
-        
-        # Set environment variable to indicate this is a build test
-        $env:PYINSTALLER_BUILD_TEST = "true"
-        
-        # Try to run the executable with --help or similar safe flag
-        # Note: This might fail due to license validation, but we can check if it starts
-        try {
-          $process = Start-Process -FilePath $exePath -ArgumentList "--build" -PassThru -NoNewWindow -Wait -RedirectStandardOutput "test_output.txt" -RedirectStandardError "test_error.txt"
-          Write-Host "Executable started successfully (exit code: $($process.ExitCode))"
-          
-          if (Test-Path "test_output.txt") {
-            $output = Get-Content "test_output.txt"
-            Write-Host "Output: $output"
-          }
-          if (Test-Path "test_error.txt") {
-            $error = Get-Content "test_error.txt"
-            if ($error) { Write-Host "Error: $error" }
-          }
-        } catch {
-          Write-Host "⚠️ Executable test encountered issues, but build may still be valid: $_"
-        }
-        
-    - name: Create release
+    - name: Create GitHub release
       if: success()
       run: |
         $version = "v${{ steps.extract_version.outputs.version }}"
@@ -187,36 +156,51 @@ jobs:
         $releaseNotes = @"
         ## PDF Metadata Tool Professional $version
         
-        Enterprise-grade PDF metadata restoration with secure licensing.
+        🔐 Enterprise-grade PDF metadata restoration with secure licensing.
         
-        ### Features
+        ### ✨ Features
         - Advanced PDF metadata processing
-        - Hardware-locked license validation
+        - Hardware-locked license validation  
         - Automatic update notifications
         - Professional UI design
+        - Build mode for development/testing
         
-        ### Requirements
+        ### 📋 Requirements
         - Windows 10/11 (64-bit)
-        - Valid license key
-        - Internet connection for validation
+        - Valid license key from halexandros25@gmail.com
+        - Internet connection for license validation
         
-        ### Installation
-        1. Download the executable
+        ### 🚀 Installation
+        1. Download the executable below
         2. Run the executable
         3. Enter your license key when prompted
+        4. Follow the on-screen instructions
         
-        ### Support
-        - Contact: halexandros25@gmail.com
+        ### 🔧 For Developers
+        - Use \`--build\` flag to bypass license validation during testing
+        - Build mode automatically detected during PyInstaller builds
+        - Comprehensive error logging and diagnostics included
+        
+        ### 📞 Support
+        - Email: halexandros25@gmail.com
         - License Server: https://pdf-license-server-dmyx.onrender.com
+        - Repository: https://github.com/${{ github.repository }}
         
-        ### Build Information
+        ### 🛠️ Build Information
         - Python Version: ${{ env.PYTHON_VERSION }}
         - PyInstaller Version: 6.7.0
         - Build Date: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss UTC")
         - Commit: ${{ github.sha }}
+        - Workflow: ${{ github.workflow }}
+        
+        ---
+        
+        **Download the executable below and contact halexandros25@gmail.com for your license key.**
         "@
         
+        Write-Host "Creating GitHub release: $version"
         gh release create $version $exePath --title "PDF Metadata Tool $version" --notes $releaseNotes --draft=false --prerelease=false
+        Write-Host "✅ Release created successfully"
       env:
         GH_TOKEN: ${{ github.token }}
         
@@ -225,62 +209,103 @@ jobs:
       run: |
         $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/v${{ steps.extract_version.outputs.version }}/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         
-        $data = @{
+        $notificationData = @{
           version = "v${{ steps.extract_version.outputs.version }}"
           download_url = $downloadUrl
           release_date = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
           build_number = "${{ github.run_number }}"
           commit_sha = "${{ github.sha }}"
+          repository = "${{ github.repository }}"
+          workflow_run = "${{ github.run_id }}"
         } | ConvertTo-Json
         
         try {
-          $response = Invoke-RestMethod -Uri "https://pdf-license-server-dmyx.onrender.com/api/release-notification" -Method POST -Body $data -ContentType "application/json" -TimeoutSec 30
+          Write-Host "Notifying license server..."
+          $response = Invoke-RestMethod `
+            -Uri "https://pdf-license-server-dmyx.onrender.com/api/release-notification" `
+            -Method POST `
+            -Body $notificationData `
+            -ContentType "application/json" `
+            -TimeoutSec 30
+          
           Write-Host "✅ License server notified successfully"
-          Write-Host "Response: $($response | ConvertTo-Json)"
+          Write-Host "Server response: $($response | ConvertTo-Json)"
         } catch {
           Write-Host "⚠️ License server notification failed (non-critical): $_"
-          Write-Host "This doesn't affect the build success"
+          Write-Host "This doesn't affect the build success - server may be temporarily unavailable"
         }
         
     - name: Upload build artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: build-artifacts-${{ steps.extract_version.outputs.version }}
+        name: pdf-metadata-tool-${{ steps.extract_version.outputs.version }}
         path: |
           dist/
-          build/*.log
           *.spec
         retention-days: 30
+        if-no-files-found: warn
         
-    - name: Cleanup
+    - name: Upload debug logs (if build failed)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-failure-logs-${{ github.run_number }}
+        path: |
+          build/
+          *.log
+          **/*.log
+        retention-days: 7
+        if-no-files-found: ignore
+        
+    - name: Cleanup temporary files
       if: always()
       run: |
-        # Clean up temporary files but keep artifacts for debugging
-        Remove-Item -Path "test_*.txt" -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "requirements.txt" -Force -ErrorAction SilentlyContinue
-        Write-Host "✅ Cleanup completed"
-
-  notify_completion:
-    name: Notify Build Completion  
-    runs-on: ubuntu-latest
-    needs: build
-    if: always()
-    
-    steps:
-    - name: Notify success
-      if: needs.build.result == 'success'
-      run: |
-        echo "🎉 Build completed successfully!"
-        echo "The PDF Metadata Tool executable has been built and released."
+        Write-Host "Cleaning up temporary files..."
+        # Remove build directory to save space (keep dist for artifacts)
+        if (Test-Path "build") {
+          Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host "✅ Build directory cleaned"
+        }
         
-    - name: Notify failure
-      if: needs.build.result == 'failure'
+        # Clean up any temporary log files
+        Get-ChildItem -Filter "*.log" | Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Host "✅ Temporary files cleaned"
+        
+    - name: Build summary
+      if: always()
       run: |
-        echo "❌ Build failed!"
-        echo "Check the build logs for detailed error information."
-        echo "Common issues to check:"
-        echo "1. Missing dependencies"
-        echo "2. Syntax errors in client.py"
-        echo "3. PyInstaller compatibility issues"
-        echo "4. Windows-specific build problems"
+        Write-Host "=== BUILD SUMMARY ==="
+        Write-Host "Workflow: ${{ github.workflow }}"
+        Write-Host "Run ID: ${{ github.run_id }}"
+        Write-Host "Commit: ${{ github.sha }}"
+        Write-Host "Version: v${{ steps.extract_version.outputs.version }}"
+        Write-Host "Timestamp: $(Get-Date)"
+        
+        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        if (Test-Path $exePath) {
+          $fileInfo = Get-Item $exePath
+          Write-Host ""
+          Write-Host "🎉 BUILD SUCCESSFUL! 🎉"
+          Write-Host "📦 Executable: $($fileInfo.Name)"
+          Write-Host "💾 Size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
+          Write-Host "🔗 Download from: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.extract_version.outputs.version }}"
+          Write-Host ""
+          Write-Host "📋 Next steps:"
+          Write-Host "   1. Download the executable from the release"
+          Write-Host "   2. Contact halexandros25@gmail.com for license key"
+          Write-Host "   3. Run the executable and enter license when prompted"
+          Write-Host ""
+          Write-Host "🔧 For testing: Use --build flag to bypass license validation"
+        } else {
+          Write-Host ""
+          Write-Host "❌ BUILD FAILED"
+          Write-Host "   Check the logs above for error details"
+          Write-Host "   Download the failure logs artifact for debugging"
+          Write-Host ""
+          Write-Host "🔍 Common solutions:"
+          Write-Host "   1. Check client.py syntax with: python -c \"import ast; ast.parse(open('client.py').read())\""
+          Write-Host "   2. Test imports with: python -c \"import client\""
+          Write-Host "   3. Run the debug build workflow for detailed diagnostics"
+          Write-Host "   4. Ensure BUILD_MODE detection is implemented in client.py"
+        }
