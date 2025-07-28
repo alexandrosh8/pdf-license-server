@@ -87,7 +87,7 @@ jobs:
       run: |
         Write-Host "🔨 Creating PyInstaller spec file..."
         
-        $specContent = @"
+        $specContent = @'
 # -*- mode: python ; coding: utf-8 -*-
 import sys
 from PyInstaller.building.build_main import Analysis, PYZ, EXE
@@ -137,7 +137,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}',
+    name='APP_NAME_PLACEHOLDER',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -151,7 +151,10 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-"@
+'@
+        
+        # Replace placeholder with actual app name
+        $specContent = $specContent -replace 'APP_NAME_PLACEHOLDER', "${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}"
         
         $specContent | Out-File -FilePath "build_client.spec" -Encoding UTF8
         Write-Host "✅ Spec file created"
