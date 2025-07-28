@@ -1476,8 +1476,10 @@ def log_admin_session(username, ip_address):
     except Exception as e:
         logger.error(f"Failed to log admin session: {e}")
         return None
-        
-        # Add this right after the GitHub integration class and before ENHANCED_ADMIN_HTML
+
+# =============================================================================
+# HTML TEMPLATES
+# =============================================================================
 
 ENHANCED_INDEX_HTML = '''
 <!DOCTYPE html>
@@ -1791,10 +1793,6 @@ ENHANCED_INDEX_HTML = '''
 </html>
 '''
 
-# =============================================================================
-# ENHANCED HTML TEMPLATES
-# =============================================================================
-
 ENHANCED_ADMIN_HTML = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -1839,6 +1837,12 @@ ENHANCED_ADMIN_HTML = '''
             box-shadow: 0 10px 25px rgba(37, 99, 235, 0.15);
         }
 
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+
         .stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -1862,6 +1866,11 @@ ENHANCED_ADMIN_HTML = '''
             font-weight: 700;
             color: var(--primary-color);
             margin-bottom: 0.5rem;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-weight: 500;
         }
 
         .card {
@@ -1913,7 +1922,6 @@ ENHANCED_ADMIN_HTML = '''
         .tab-content { display: none; }
         .tab-content.active { display: block; }
 
-        /* Enhanced License Table Styles */
         .licenses-table {
             width: 100%;
             border-collapse: collapse;
@@ -1938,7 +1946,6 @@ ENHANCED_ADMIN_HTML = '''
 
         .licenses-table tr:hover { background: #f8fafc; }
 
-        /* Enhanced License Info Layout */
         .license-info {
             display: flex;
             flex-direction: column;
@@ -2023,7 +2030,6 @@ ENHANCED_ADMIN_HTML = '''
             color: var(--text-secondary);
         }
 
-        /* Enhanced Usage Display */
         .usage-count {
             font-weight: 700;
             font-size: 1.1rem;
@@ -2114,7 +2120,6 @@ ENHANCED_ADMIN_HTML = '''
             flex-wrap: wrap;
         }
 
-        /* GitHub Upload Section */
         .upload-section {
             background: linear-gradient(135deg, #f8fafc, #f1f5f9);
             border: 2px dashed var(--border);
@@ -2153,34 +2158,6 @@ ENHANCED_ADMIN_HTML = '''
             transform: translateY(-1px);
         }
 
-        .tooltip {
-            position: relative;
-            display: inline-block;
-        }
-
-        .tooltip .tooltiptext {
-            visibility: hidden;
-            width: 200px;
-            background-color: #1e293b;
-            color: #fff;
-            text-align: center;
-            border-radius: 6px;
-            padding: 8px;
-            position: absolute;
-            z-index: 1;
-            bottom: 125%;
-            left: 50%;
-            margin-left: -100px;
-            opacity: 0;
-            transition: opacity 0.3s;
-            font-size: 0.75rem;
-        }
-
-        .tooltip:hover .tooltiptext {
-            visibility: visible;
-            opacity: 1;
-        }
-
         @media (max-width: 1200px) {
             .licenses-table {
                 display: block;
@@ -2200,8 +2177,442 @@ ENHANCED_ADMIN_HTML = '''
     </style>
 </head>
 <body>
-    <!-- HTML content from enhanced_admin_template artifact will be inserted here -->
-    <!-- This template includes all the enhanced features you requested -->
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1><i class="bi bi-shield-lock"></i> License Admin Dashboard</h1>
+            <p>Enhanced Flask 3.0+ Professional Edition</p>
+            <div style="margin-top: 1rem; font-size: 0.875rem; opacity: 0.9;">
+                Connected from: {{ current_ip }} | 
+                Database: {{ 'PostgreSQL' if is_postgresql else 'SQLite' }} | 
+                Status: {{ 'Ready' if database_initialized else 'Initializing' }}
+                {% if github_configured %}
+                | GitHub: {{ github_repo }}
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash {{ category }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Statistics -->
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.total_licenses or 0 }}</div>
+                <div class="stat-label">Total Licenses</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.active_licenses or 0 }}</div>
+                <div class="stat-label">Active Licenses</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ stats.valid_licenses or 0 }}</div>
+                <div class="stat-label">Valid Licenses</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number">{{ (recent_validations | length) or 0 }}</div>
+                <div class="stat-label">Recent Validations</div>
+            </div>
+        </div>
+
+        <!-- System Actions -->
+        <div class="card">
+            <div class="card-header">
+                <span><i class="bi bi-tools"></i> System Actions</span>
+            </div>
+            <div class="card-body">
+                <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                    <a href="/" class="btn btn-primary">
+                        <i class="bi bi-house"></i> Home
+                    </a>
+                    <form method="POST" action="/admin/safe-repair" style="display: inline;">
+                        <button type="submit" class="btn btn-warning" 
+                                onclick="return confirm('Repair database? This is safe and preserves data.')">
+                            <i class="bi bi-wrench"></i> Safe Repair
+                        </button>
+                    </form>
+                    <a href="/health" class="btn btn-success" target="_blank">
+                        <i class="bi bi-heart-pulse"></i> Health Check
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="showTab('licenses')">
+                <i class="bi bi-key"></i> Licenses
+            </button>
+            <button class="tab" onclick="showTab('create')">
+                <i class="bi bi-plus-circle"></i> Create License
+            </button>
+            <button class="tab" onclick="showTab('validations')">
+                <i class="bi bi-activity"></i> Validation Logs
+            </button>
+            {% if github_configured %}
+            <button class="tab" onclick="showTab('github')">
+                <i class="bi bi-github"></i> GitHub Deploy
+            </button>
+            {% endif %}
+        </div>
+
+        <!-- Tab: Licenses -->
+        <div id="licenses" class="tab-content active">
+            <div class="card">
+                <div class="card-header">
+                    <span><i class="bi bi-key"></i> License Management ({{ (licenses | length) or 0 }} licenses)</span>
+                </div>
+                <div class="card-body">
+                    {% if licenses %}
+                    <div style="overflow-x: auto;">
+                        <table class="licenses-table">
+                            <thead>
+                                <tr>
+                                    <th>License Info</th>
+                                    <th>Customer</th>
+                                    <th>Dates</th>
+                                    <th>Hardware</th>
+                                    <th>Usage</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for license in licenses %}
+                                <tr>
+                                    <td>
+                                        <div class="license-info">
+                                            <div class="license-key-row">
+                                                <span class="license-key" onclick="copyToClipboard('{{ license.license_key }}', this)">
+                                                    {{ license.license_key }}
+                                                </span>
+                                                <button class="copy-btn" onclick="copyToClipboard('{{ license.license_key }}', this)">
+                                                    <i class="bi bi-copy"></i>
+                                                </button>
+                                            </div>
+                                            <div class="date-info">Created by: {{ license.created_by or 'system' }}</div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="customer-info">
+                                            {% if license.customer_name %}
+                                                <div class="customer-name">{{ license.customer_name }}</div>
+                                            {% endif %}
+                                            <div class="customer-email">{{ license.customer_email }}</div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="date-info">
+                                            <div><strong>Created:</strong> {{ license.created_date | formatdatetime }}</div>
+                                            <div><strong>Expires:</strong> {{ license.expiry_date | formatdatetime }}</div>
+                                            {% if license.last_used %}
+                                                <div><strong>Last Used:</strong> {{ license.last_used | formatdatetime }}</div>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        {% if license.hardware_id %}
+                                            <div class="hardware-id">{{ license.hardware_id[:16] }}...</div>
+                                        {% else %}
+                                            <span style="color: var(--text-secondary); font-style: italic;">Not bound</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <div class="usage-count">{{ license.validation_count or 0 }}</div>
+                                    </td>
+                                    <td>
+                                        {% if license.active %}
+                                            <span class="status-badge active">Active</span>
+                                        {% else %}
+                                            <span class="status-badge inactive">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <div class="action-buttons">
+                                            <form method="POST" action="/admin/toggle_license" style="display: inline;">
+                                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                                <button type="submit" class="btn btn-warning">
+                                                    <i class="bi bi-toggle-off"></i>
+                                                </button>
+                                            </form>
+                                            <form method="POST" action="/admin/extend_license" style="display: inline;">
+                                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                                <input type="hidden" name="extend_days" value="30">
+                                                <button type="submit" class="btn btn-success" title="Extend 30 days">
+                                                    <i class="bi bi-calendar-plus"></i>
+                                                </button>
+                                            </form>
+                                            <form method="POST" action="/admin/delete_license" style="display: inline;">
+                                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                                <button type="submit" class="btn btn-danger" 
+                                                        onclick="return confirm('Delete license {{ license.license_key }}?')">
+                                                    <i class="bi bi-trash"></i>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+                        <i class="bi bi-key" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;"></i>
+                        <h3>No licenses found</h3>
+                        <p>Create your first license using the "Create License" tab.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Create License -->
+        <div id="create" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span><i class="bi bi-plus-circle"></i> Create New License</span>
+                </div>
+                <div class="card-body">
+                    <form method="POST" action="/admin/create_license">
+                        <div class="form-group">
+                            <label for="customer_email">Customer Email *</label>
+                            <input type="email" id="customer_email" name="customer_email" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="customer_name">Customer Name</label>
+                            <input type="text" id="customer_name" name="customer_name">
+                        </div>
+                        <div class="form-group">
+                            <label for="duration_days">License Duration (days)</label>
+                            <select id="duration_days" name="duration_days">
+                                <option value="7">7 days (Trial)</option>
+                                <option value="30" selected>30 days (Monthly)</option>
+                                <option value="90">90 days (Quarterly)</option>
+                                <option value="365">365 days (Yearly)</option>
+                                <option value="1095">3 years</option>
+                                <option value="1825">5 years</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-plus-circle"></i> Create License
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Validation Logs -->
+        <div id="validations" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span><i class="bi bi-activity"></i> Recent Validation Attempts ({{ (recent_validations | length) or 0 }} shown)</span>
+                </div>
+                <div class="card-body">
+                    {% if recent_validations %}
+                    <div style="overflow-x: auto;">
+                        <table class="licenses-table">
+                            <thead>
+                                <tr>
+                                    <th>License Key</th>
+                                    <th>Hardware ID</th>
+                                    <th>Status</th>
+                                    <th>IP Address</th>
+                                    <th>Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for validation in recent_validations %}
+                                <tr>
+                                    <td>
+                                        <span class="license-key">{{ validation.license_key or 'N/A' }}</span>
+                                    </td>
+                                    <td>
+                                        {% if validation.hardware_id %}
+                                            <span class="hardware-id">{{ validation.hardware_id[:16] }}...</span>
+                                        {% else %}
+                                            <span style="color: var(--text-secondary);">N/A</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if validation.status == 'VALID' %}
+                                            <span class="status-badge active">{{ validation.status }}</span>
+                                        {% else %}
+                                            <span class="status-badge inactive">{{ validation.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ validation.ip_address or 'Unknown' }}</td>
+                                    <td>{{ validation.timestamp | formatdatetimefull }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div style="text-align: center; padding: 3rem; color: var(--text-secondary);">
+                        <i class="bi bi-activity" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.5;"></i>
+                        <h3>No validation logs</h3>
+                        <p>Validation attempts will appear here when clients validate licenses.</p>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: GitHub Deploy (only if configured) -->
+        {% if github_configured %}
+        <div id="github" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <span><i class="bi bi-github"></i> GitHub Auto-Deploy System</span>
+                    <span style="font-size: 0.875rem; color: var(--text-secondary);">{{ github_repo }}</span>
+                </div>
+                <div class="card-body">
+                    <div class="upload-section">
+                        <h3><i class="bi bi-upload"></i> Deploy New Client Version</h3>
+                        <p style="margin: 1rem 0; color: var(--text-secondary);">
+                            Upload a new client file to automatically deploy to GitHub and trigger builds
+                        </p>
+                        
+                        <form method="POST" action="/admin/upload-client" enctype="multipart/form-data">
+                            <div class="file-input">
+                                <input type="file" id="client_file" name="client_file" accept=".py" required>
+                                <label for="client_file">
+                                    <i class="bi bi-file-earmark-code"></i> Choose Python File
+                                </label>
+                            </div>
+                            <div class="form-group" style="max-width: 300px; margin: 1rem auto;">
+                                <label for="version_tag">Version Tag</label>
+                                <input type="text" id="version_tag" name="version_tag" 
+                                       placeholder="v2024.01.15.1200">
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-github"></i> Deploy to GitHub
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Client Upload History -->
+                    {% if client_uploads %}
+                    <h4 style="margin: 2rem 0 1rem 0;">Recent Deployments</h4>
+                    <div style="overflow-x: auto;">
+                        <table class="licenses-table">
+                            <thead>
+                                <tr>
+                                    <th>Filename</th>
+                                    <th>Version</th>
+                                    <th>Upload Date</th>
+                                    <th>Uploaded By</th>
+                                    <th>Build Status</th>
+                                    <th>GitHub URL</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for upload in client_uploads %}
+                                <tr>
+                                    <td>{{ upload.filename }}</td>
+                                    <td>{{ upload.version_tag or 'N/A' }}</td>
+                                    <td>{{ upload.upload_date | formatdatetimefull }}</td>
+                                    <td>{{ upload.uploaded_by or 'Unknown' }}</td>
+                                    <td>
+                                        {% if upload.build_status == 'completed' %}
+                                            <span class="status-badge active">Completed</span>
+                                        {% elif upload.build_status == 'uploaded' %}
+                                            <span class="status-badge" style="background: #fbbf24; color: #92400e;">Uploaded</span>
+                                        {% else %}
+                                            <span class="status-badge inactive">{{ upload.build_status or 'Pending' }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if upload.github_url %}
+                                            <a href="{{ upload.github_url }}" target="_blank" class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;">
+                                                <i class="bi bi-link-45deg"></i> View
+                                            </a>
+                                        {% else %}
+                                            N/A
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        // Tab functionality
+        function showTab(tabName) {
+            // Hide all tab contents
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
+
+            // Remove active class from all tabs
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+        }
+
+        // Copy to clipboard functionality
+        function copyToClipboard(text, button) {
+            navigator.clipboard.writeText(text).then(function() {
+                const originalText = button.innerHTML;
+                button.innerHTML = '<i class="bi bi-check"></i>';
+                button.classList.add('copied');
+                
+                setTimeout(function() {
+                    button.innerHTML = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            }).catch(function(err) {
+                console.error('Failed to copy: ', err);
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                
+                button.innerHTML = '<i class="bi bi-check"></i>';
+                button.classList.add('copied');
+                setTimeout(function() {
+                    button.innerHTML = '<i class="bi bi-copy"></i>';
+                    button.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        // File input display
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('client_file');
+            if (fileInput) {
+                fileInput.addEventListener('change', function() {
+                    const label = document.querySelector('label[for="client_file"]');
+                    if (this.files && this.files[0]) {
+                        label.innerHTML = `<i class="bi bi-file-earmark-code"></i> ${this.files[0].name}`;
+                    }
+                });
+            }
+        });
+    </script>
 </body>
 </html>
 '''
@@ -2410,8 +2821,6 @@ ENHANCED_REPAIR_HTML = '''
 </body>
 </html>
 '''
-
-# ... [Continue with remaining admin routes and enhanced templates] ...
 
 if __name__ == '__main__':
     # Initialize database when running locally with app context
