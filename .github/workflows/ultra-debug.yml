@@ -1,0 +1,156 @@
+name: Ultra-Minimal Debug
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  ultra-debug:
+    name: Ultra-Minimal Diagnostics
+    runs-on: windows-latest
+    
+    steps:
+    - name: Step 1 - Checkout
+      uses: actions/checkout@v4
+      
+    - name: Step 2 - Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Step 3 - Basic Environment Check
+      run: |
+        Write-Host "=== BASIC ENVIRONMENT ==="
+        Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
+        Write-Host "Python version:"
+        python --version
+        Write-Host "Python location:"
+        python -c "import sys; print(sys.executable)"
+        Write-Host "Current directory:"
+        Get-Location
+        Write-Host "Files in current directory:"
+        Get-ChildItem | Select-Object Name, Length | Format-Table
+        
+    - name: Step 4 - Check client.py
+      run: |
+        Write-Host "=== CLIENT.PY CHECK ==="
+        if (Test-Path "client.py") {
+          Write-Host "✅ client.py found"
+          $fileInfo = Get-Item "client.py"
+          Write-Host "Size: $($fileInfo.Length) bytes"
+          Write-Host "First 5 lines:"
+          Get-Content "client.py" -TotalCount 5
+        } else {
+          Write-Host "❌ client.py not found"
+          Write-Host "Available files:"
+          Get-ChildItem | Format-Table Name
+          exit 1
+        }
+        
+    - name: Step 5 - Python Syntax Check
+      run: |
+        Write-Host "=== PYTHON SYNTAX CHECK ==="
+        try {
+          python -c "import ast; ast.parse(open('client.py').read()); print('✅ Syntax OK')"
+        } catch {
+          Write-Host "❌ Syntax error in client.py:"
+          Write-Host $_
+          exit 1
+        }
+        
+    - name: Step 6 - Pip Upgrade
+      run: |
+        Write-Host "=== PIP UPGRADE ==="
+        python -m pip install --upgrade pip
+        Write-Host "Pip version:"
+        pip --version
+        
+    - name: Step 7 - Install PyInstaller Only
+      run: |
+        Write-Host "=== PYINSTALLER INSTALLATION ==="
+        python -m pip install pyinstaller==6.7.0
+        Write-Host "PyInstaller version:"
+        pyinstaller --version
+        
+    - name: Step 8 - Test PyInstaller with Simple Script
+      run: |
+        Write-Host "=== SIMPLE PYINSTALLER TEST ==="
+        Write-Host "Creating test script..."
+        'print("Hello from test script")' | Out-File -FilePath "test.py" -Encoding utf8
+        
+        Write-Host "Running PyInstaller on test script..."
+        pyinstaller --onefile --clean --noconfirm test.py
+        
+        Write-Host "Checking results..."
+        if (Test-Path "dist/test.exe") {
+          Write-Host "✅ Simple PyInstaller test successful"
+          Get-Item "dist/test.exe" | Format-List Name, Length
+        } else {
+          Write-Host "❌ Simple PyInstaller test failed"
+          Write-Host "Contents of current directory:"
+          Get-ChildItem -Recurse | Format-Table Name, FullName
+          exit 1
+        }
+        
+    - name: Step 9 - Clean Up Test Files
+      run: |
+        Write-Host "=== CLEANUP ==="
+        Remove-Item -Path "dist", "build" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "test.py", "test.spec" -Force -ErrorAction SilentlyContinue
+        Write-Host "✅ Cleanup complete"
+        
+    - name: Step 10 - Try client.py with PyInstaller
+      run: |
+        Write-Host "=== CLIENT.PY PYINSTALLER TEST ==="
+        Write-Host "Attempting to build client.py..."
+        
+        try {
+          pyinstaller --onefile --clean --noconfirm --name "test-client" client.py
+          
+          if (Test-Path "dist/test-client.exe") {
+            Write-Host "🎉 SUCCESS! client.py built successfully"
+            $exe = Get-Item "dist/test-client.exe"
+            Write-Host "Executable: $($exe.Name)"
+            Write-Host "Size: $($exe.Length) bytes"
+          } else {
+            Write-Host "❌ Build failed - no executable created"
+            Write-Host "Contents of dist directory:"
+            if (Test-Path "dist") {
+              Get-ChildItem "dist" | Format-Table
+            } else {
+              Write-Host "No dist directory created"
+            }
+            exit 1
+          }
+        } catch {
+          Write-Host "❌ PyInstaller command failed:"
+          Write-Host $_.Exception.Message
+          Write-Host "Full error:"
+          Write-Host $_
+          exit 1
+        }
+        
+    - name: Step 11 - Final Status
+      if: always()
+      run: |
+        Write-Host "=== FINAL STATUS ==="
+        if (Test-Path "dist/test-client.exe") {
+          Write-Host "🎉 ULTRA DEBUG SUCCESSFUL!"
+          Write-Host "Your client.py can be built with PyInstaller!"
+          Write-Host "The issue was likely in the previous workflow configuration."
+        } else {
+          Write-Host "❌ ULTRA DEBUG FAILED"
+          Write-Host "The issue is with client.py or the basic build process."
+        }
+        
+    - name: Step 12 - Upload Results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ultra-debug-results
+        path: |
+          dist/
+          *.spec
+        retention-days: 7
+        if-no-files-found: warn
