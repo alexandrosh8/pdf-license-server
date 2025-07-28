@@ -728,8 +728,53 @@ def require_auth(f):
 # NEW: GITHUB INTEGRATION ENDPOINTS
 # =============================================================================
 
-@app.route('/api/client-update-notification')
-def client_update_notification():
+@app.route('/api/release-notification', methods=['POST'])
+def release_notification():
+    """Webhook endpoint for GitHub release notifications"""
+    try:
+        if not ensure_database_ready():
+            return jsonify({"error": "Database not ready"}), 503
+        
+        data = request.get_json() or {}
+        version = data.get('version', 'unknown')
+        download_url = data.get('download_url', '')
+        release_date = data.get('release_date', datetime.now().isoformat())
+        build_number = data.get('build_number', 0)
+        commit_sha = data.get('commit_sha', '')
+        
+        # Update client_uploads table with new release info
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        if is_postgresql():
+            cur.execute('''
+                INSERT INTO client_uploads (filename, version_tag, github_url, build_status, uploaded_by)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (version_tag) DO UPDATE SET
+                    build_status = 'completed',
+                    github_url = EXCLUDED.github_url
+            ''', (f'client-{version}.exe', version, download_url, 'completed', 'github-actions'))
+        else:
+            cur.execute('''
+                INSERT OR REPLACE INTO client_uploads (filename, version_tag, github_url, build_status, uploaded_by)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (f'client-{version}.exe', version, download_url, 'completed', 'github-actions'))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        logger.info(f"✅ Release notification received: {version}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Release {version} notification processed",
+            "version": version
+        })
+        
+    except Exception as e:
+        logger.error(f"Release notification failed: {e}")
+        return jsonify({"error": str(e)}), 500
     """API endpoint for clients to check for updates"""
     try:
         if not ensure_database_ready():
@@ -2318,7 +2363,6 @@ ENHANCED_ADMIN_HTML = '''
                                                     <i class="bi bi-copy"></i>
                                                 </button>
                                             </div>
-                                            <div class="date-info">Created by: {{ license.created_by or 'system' }}</div>
                                         </div>
                                     </td>
                                     <td>
