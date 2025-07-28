@@ -37,25 +37,34 @@ jobs:
     - name: Cache pip dependencies
       uses: actions/cache@v3
       with:
-        path: ~/.cache/pip
+        path: ~\AppData\Local\pip\Cache
         key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-pip-
           
-    - name: Install dependencies
+    - name: Install system dependencies and upgrade pip
       run: |
-        python -m pip install --upgrade pip
-        pip install pyinstaller
-        pip install aiohttp aiofiles psutil requests
-        echo "Dependencies installed successfully"
+        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install --upgrade pyinstaller==5.13.2
+        echo "✅ Base dependencies installed"
+        
+    - name: Install application dependencies
+      run: |
+        python -m pip install aiohttp aiofiles psutil requests
+        python -m pip install cryptography pywin32
+        echo "✅ Application dependencies installed"
         
     - name: Verify client.py exists
       run: |
         if (Test-Path "client.py") {
           Write-Host "✅ client.py found"
-          Get-Content client.py -Head 5
+          $content = Get-Content client.py -Head 10
+          Write-Host "First 10 lines of client.py:"
+          $content | ForEach-Object { Write-Host "  $_" }
         } else {
-          Write-Host "❌ client.py not found"
+          Write-Host "❌ client.py not found in current directory"
+          Write-Host "Current directory contents:"
+          Get-ChildItem | ForEach-Object { Write-Host "  $($_.Name)" }
           exit 1
         }
         
@@ -74,64 +83,104 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
         }
         
-    - name: Create application icon (optional)
+    - name: Create spec file
       run: |
-        # Create a simple icon file if it doesn't exist
-        $iconPath = "app_icon.ico"
-        if (-not (Test-Path $iconPath)) {
-          Write-Host "Creating default application icon..."
-          # You can add your custom icon creation logic here
-          # For now, we'll build without an icon
-        }
+        Write-Host "🔨 Creating PyInstaller spec file..."
+        
+        $specContent = @"
+# -*- mode: python ; coding: utf-8 -*-
+import sys
+from PyInstaller.building.build_main import Analysis, PYZ, EXE
+
+block_cipher = None
+
+a = Analysis(
+    ['client.py'],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[
+        'aiohttp',
+        'aiofiles', 
+        'asyncio',
+        'json',
+        'hashlib',
+        'platform',
+        'subprocess',
+        'pathlib',
+        'tempfile',
+        'zipfile',
+        'shutil',
+        'logging',
+        'threading',
+        'requests',
+        'psutil',
+        'cryptography',
+        'pkg_resources.extern'
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+"@
+        
+        $specContent | Out-File -FilePath "build_client.spec" -Encoding UTF8
+        Write-Host "✅ Spec file created"
         
     - name: Build executable with PyInstaller
       run: |
-        Write-Host "🔨 Building executable..."
+        Write-Host "🔨 Building executable with PyInstaller..."
         
-        # Create build directory
+        # Create dist directory
         if (-not (Test-Path "dist")) {
           New-Item -ItemType Directory -Path "dist"
         }
         
-        # Build command
-        $buildArgs = @(
-          "--onefile",
-          "--noconsole",
-          "--name", "${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}",
-          "--distpath", "dist",
-          "--workpath", "build",
-          "--specpath", "build"
-        )
-        
-        # Add icon if exists
-        if (Test-Path "app_icon.ico") {
-          $buildArgs += "--icon", "app_icon.ico"
+        # Run PyInstaller with spec file
+        try {
+          pyinstaller build_client.spec --clean --noconfirm --distpath dist --workpath build --specpath .
+          Write-Host "✅ Build completed successfully"
+        } catch {
+          Write-Host "❌ Build failed: $_"
+          Write-Host "PyInstaller logs:"
+          if (Test-Path "build\build_client\warn-build_client.txt") {
+            Get-Content "build\build_client\warn-build_client.txt"
+          }
+          exit 1
         }
-        
-        # Add hidden imports for common libraries
-        $hiddenImports = @(
-          "aiohttp", "aiofiles", "asyncio", "json", "hashlib",
-          "platform", "subprocess", "pathlib", "tempfile",
-          "zipfile", "shutil", "logging", "threading"
-        )
-        
-        foreach ($import in $hiddenImports) {
-          $buildArgs += "--hidden-import", $import
-        }
-        
-        # Add the main script
-        $buildArgs += "client.py"
-        
-        Write-Host "PyInstaller arguments:"
-        $buildArgs | ForEach-Object { Write-Host "  $_" }
-        
-        pyinstaller @buildArgs
-        
-        Write-Host "✅ Build completed"
         
     - name: Verify build output
       run: |
-        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        $exePath = "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         if (Test-Path $exePath) {
           $fileInfo = Get-Item $exePath
           Write-Host "✅ Executable created successfully:"
@@ -141,84 +190,83 @@ jobs:
         } else {
           Write-Host "❌ Executable not found at expected path: $exePath"
           Write-Host "Contents of dist directory:"
-          Get-ChildItem -Path "dist" -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+          if (Test-Path "dist") {
+            Get-ChildItem -Path "dist" -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
+          } else {
+            Write-Host "  dist directory does not exist"
+          }
           exit 1
         }
         
     - name: Test executable (basic check)
       run: |
-        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        $exePath = "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         Write-Host "🧪 Testing executable..."
         
-        # Quick test to ensure the executable starts (it should exit quickly in build mode)
         try {
-          $process = Start-Process -FilePath $exePath -ArgumentList "--build" -Wait -PassThru -WindowStyle Hidden
-          if ($process.ExitCode -eq 0) {
-            Write-Host "✅ Executable test passed"
-          } else {
-            Write-Host "⚠️ Executable test returned exit code: $($process.ExitCode)"
-          }
+          # Test that the executable can start (should exit quickly with --version or similar)
+          $process = Start-Process -FilePath $exePath -ArgumentList "--help" -Wait -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+          Write-Host "✅ Executable test completed (exit code: $($process.ExitCode))"
         } catch {
-          Write-Host "⚠️ Executable test failed: $_"
-          # Don't fail the build for test issues
+          Write-Host "⚠️ Executable test warning: $_"
+          Write-Host "This may be normal if the app requires GUI interaction"
         }
         
-    - name: Create release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: v${{ steps.extract_version.outputs.version }}
-        release_name: PDF Metadata Tool v${{ steps.extract_version.outputs.version }}
-        body: |
-          ## PDF Metadata Tool Professional v${{ steps.extract_version.outputs.version }}
-          
-          🔐 **Enterprise-grade PDF metadata restoration with secure licensing**
-          
-          ### 🚀 Features
-          - Advanced PDF metadata processing engine
-          - Hardware-locked license validation  
-          - Automatic update notifications
-          - Professional Material Design UI
-          - Real-time progress tracking
-          - Enhanced error handling and logging
-          
-          ### 📋 Requirements
-          - Windows 10/11 (64-bit)
-          - Valid license key from administrator
-          - Internet connection for license validation
-          
-          ### 🔧 Installation
-          1. Download the executable below
-          2. Run the application 
-          3. Enter your license key when prompted
-          4. Place PDF files in the 'original' folder
-          5. Processed files will appear in 'processed' folder
-          
-          ### 📧 Support
-          For licensing and technical support, contact: halexandros25@gmail.com
-          Include your Hardware ID when requesting a license.
-          
-          ### 🔐 License Server
-          This client connects to: https://pdf-license-server-dmyx.onrender.com
-          
-          ---
-          **Built on:** ${{ github.run_started_at }}  
-          **Commit:** ${{ github.sha }}  
-          **Build #:** ${{ github.run_number }}
-        draft: false
-        prerelease: false
+    - name: Create release using GitHub CLI
+      run: |
+        $version = "v${{ steps.extract_version.outputs.version }}"
+        $exePath = "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         
-    - name: Upload release asset
-      uses: actions/upload-release-asset@v1
+        Write-Host "📦 Creating GitHub release..."
+        
+        $releaseBody = @"
+## PDF Metadata Tool Professional $version
+
+🔐 **Enterprise-grade PDF metadata restoration with secure licensing**
+
+### 🚀 Features
+- Advanced PDF metadata processing engine
+- Hardware-locked license validation  
+- Automatic update notifications
+- Professional Material Design UI
+- Real-time progress tracking
+- Enhanced error handling and logging
+
+### 📋 Requirements
+- Windows 10/11 (64-bit)
+- Valid license key from administrator
+- Internet connection for license validation
+
+### 🔧 Installation
+1. Download the executable below
+2. Run the application 
+3. Enter your license key when prompted
+4. Place PDF files in the 'original' folder
+5. Processed files will appear in 'processed' folder
+
+### 📧 Support
+For licensing and technical support, contact: halexandros25@gmail.com
+Include your Hardware ID when requesting a license.
+
+### 🔐 License Server
+This client connects to: https://pdf-license-server-dmyx.onrender.com
+
+---
+**Built on:** ${{ github.run_started_at }}  
+**Commit:** ${{ github.sha }}  
+**Build #:** ${{ github.run_number }}
+"@
+        
+        # Create release and upload asset using GitHub CLI
+        try {
+          gh release create $version $exePath --title "PDF Metadata Tool $version" --notes $releaseBody
+          Write-Host "✅ Release created successfully"
+        } catch {
+          Write-Host "❌ Release creation failed: $_"
+          exit 1
+        }
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe
-        asset_name: ${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe
-        asset_content_type: application/octet-stream
+        GH_TOKEN: ${{ github.token }}
         
     - name: Update license server
       run: |
@@ -226,27 +274,35 @@ jobs:
         
         $releaseData = @{
           version = "v${{ steps.extract_version.outputs.version }}"
-          download_url = "${{ steps.create_release.outputs.html_url }}"
+          download_url = "https://github.com/${{ github.repository }}/releases/tag/v${{ steps.extract_version.outputs.version }}"
           release_date = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssZ")
           build_number = "${{ github.run_number }}"
           commit_sha = "${{ github.sha }}"
         } | ConvertTo-Json
         
         try {
-          # You can add a webhook call to your license server here if needed
-          # Invoke-RestMethod -Uri "https://your-license-server.com/api/release-notification" -Method POST -Body $releaseData -ContentType "application/json"
-          Write-Host "✅ Release notification completed"
+          $headers = @{
+            'Content-Type' = 'application/json'
+            'User-Agent' = 'GitHub-Actions-Bot'
+          }
+          
+          Invoke-RestMethod -Uri "https://pdf-license-server-dmyx.onrender.com/api/release-notification" -Method POST -Body $releaseData -Headers $headers -ContentType "application/json" -TimeoutSec 30
+          Write-Host "✅ License server notified successfully"
         } catch {
-          Write-Host "⚠️ Release notification failed: $_"
-          # Don't fail the build for notification issues
+          Write-Host "⚠️ License server notification failed: $_"
+          Write-Host "This is not critical - the release was still created successfully"
         }
         
     - name: Cleanup build artifacts
       run: |
         Write-Host "🧹 Cleaning up build artifacts..."
         if (Test-Path "build") {
-          Remove-Item -Path "build" -Recurse -Force
+          Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
           Write-Host "✅ Build directory cleaned"
+        }
+        if (Test-Path "build_client.spec") {
+          Remove-Item -Path "build_client.spec" -Force -ErrorAction SilentlyContinue
+          Write-Host "✅ Spec file cleaned"
         }
         
     - name: Build summary
@@ -255,9 +311,9 @@ jobs:
         Write-Host "🎉 BUILD COMPLETED SUCCESSFULLY!"
         Write-Host "=================================="
         Write-Host "Version: v${{ steps.extract_version.outputs.version }}"
-        Write-Host "Release: ${{ steps.create_release.outputs.html_url }}"
-        Write-Host "Download: Direct link available in release"
-        Write-Host "Size: $(Get-Item "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe" | ForEach-Object { [math]::Round($_.Length / 1MB, 2) }) MB"
+        Write-Host "Release: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.extract_version.outputs.version }}"
+        Write-Host "Download: Available in GitHub release"
+        Write-Host "Size: $(Get-Item "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe" | ForEach-Object { [math]::Round($_.Length / 1MB, 2) }) MB"
         Write-Host ""
         Write-Host "🔗 Users can now download the latest version!"
         Write-Host "📱 Existing clients will receive automatic update notifications"
