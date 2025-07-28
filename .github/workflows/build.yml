@@ -83,82 +83,6 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
         }
         
-    - name: Create spec file
-      run: |
-        Write-Host "🔨 Creating PyInstaller spec file..."
-        
-        $specContent = @'
-# -*- mode: python ; coding: utf-8 -*-
-import sys
-from PyInstaller.building.build_main import Analysis, PYZ, EXE
-
-block_cipher = None
-
-a = Analysis(
-    ['client.py'],
-    pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[
-        'aiohttp',
-        'aiofiles', 
-        'asyncio',
-        'json',
-        'hashlib',
-        'platform',
-        'subprocess',
-        'pathlib',
-        'tempfile',
-        'zipfile',
-        'shutil',
-        'logging',
-        'threading',
-        'requests',
-        'psutil',
-        'cryptography',
-        'pkg_resources.extern'
-    ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
-)
-
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='APP_NAME_PLACEHOLDER',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
-'@
-        
-        # Replace placeholder with actual app name
-        $specContent = $specContent -replace 'APP_NAME_PLACEHOLDER', "${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}"
-        
-        $specContent | Out-File -FilePath "build_client.spec" -Encoding UTF8
-        Write-Host "✅ Spec file created"
-        
     - name: Build executable with PyInstaller
       run: |
         Write-Host "🔨 Building executable with PyInstaller..."
@@ -168,22 +92,49 @@ exe = EXE(
           New-Item -ItemType Directory -Path "dist"
         }
         
-        # Run PyInstaller with spec file
+        # Set the executable name
+        $exeName = "${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}"
+        
+        # Build with PyInstaller directly (no spec file needed)
         try {
-          pyinstaller build_client.spec --clean --noconfirm --distpath dist --workpath build --specpath .
+          pyinstaller --onefile --noconsole --clean --noconfirm `
+            --distpath "dist" --workpath "build" --specpath "." `
+            --name "$exeName" `
+            --hidden-import "aiohttp" `
+            --hidden-import "aiofiles" `
+            --hidden-import "asyncio" `
+            --hidden-import "json" `
+            --hidden-import "hashlib" `
+            --hidden-import "platform" `
+            --hidden-import "subprocess" `
+            --hidden-import "pathlib" `
+            --hidden-import "tempfile" `
+            --hidden-import "zipfile" `
+            --hidden-import "shutil" `
+            --hidden-import "logging" `
+            --hidden-import "threading" `
+            --hidden-import "requests" `
+            --hidden-import "psutil" `
+            --hidden-import "cryptography" `
+            --hidden-import "pkg_resources.extern" `
+            "client.py"
+            
           Write-Host "✅ Build completed successfully"
         } catch {
           Write-Host "❌ Build failed: $_"
-          Write-Host "PyInstaller logs:"
-          if (Test-Path "build\build_client\warn-build_client.txt") {
-            Get-Content "build\build_client\warn-build_client.txt"
+          Write-Host "Checking for PyInstaller logs..."
+          if (Test-Path "build") {
+            Get-ChildItem -Path "build" -Recurse -Filter "*warn*.txt" | ForEach-Object {
+              Write-Host "--- $($_.Name) ---"
+              Get-Content $_.FullName
+            }
           }
           exit 1
         }
         
     - name: Verify build output
       run: |
-        $exePath = "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         if (Test-Path $exePath) {
           $fileInfo = Get-Item $exePath
           Write-Host "✅ Executable created successfully:"
@@ -203,7 +154,7 @@ exe = EXE(
         
     - name: Test executable (basic check)
       run: |
-        $exePath = "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         Write-Host "🧪 Testing executable..."
         
         try {
@@ -218,7 +169,7 @@ exe = EXE(
     - name: Create release using GitHub CLI
       run: |
         $version = "v${{ steps.extract_version.outputs.version }}"
-        $exePath = "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
+        $exePath = "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe"
         
         Write-Host "📦 Creating GitHub release..."
         
@@ -303,10 +254,9 @@ This client connects to: https://pdf-license-server-dmyx.onrender.com
           Remove-Item -Path "build" -Recurse -Force -ErrorAction SilentlyContinue
           Write-Host "✅ Build directory cleaned"
         }
-        if (Test-Path "build_client.spec") {
-          Remove-Item -Path "build_client.spec" -Force -ErrorAction SilentlyContinue
-          Write-Host "✅ Spec file cleaned"
-        }
+        # Clean up any auto-generated spec files
+        Get-ChildItem -Filter "*.spec" | Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Host "✅ Cleanup completed"
         
     - name: Build summary
       run: |
@@ -316,7 +266,7 @@ This client connects to: https://pdf-license-server-dmyx.onrender.com
         Write-Host "Version: v${{ steps.extract_version.outputs.version }}"
         Write-Host "Release: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.extract_version.outputs.version }}"
         Write-Host "Download: Available in GitHub release"
-        Write-Host "Size: $(Get-Item "dist\${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe" | ForEach-Object { [math]::Round($_.Length / 1MB, 2) }) MB"
+        Write-Host "Size: $(Get-Item "dist/${{ env.APP_NAME }}-v${{ steps.extract_version.outputs.version }}.exe" | ForEach-Object { [math]::Round($_.Length / 1MB, 2) }) MB"
         Write-Host ""
         Write-Host "🔗 Users can now download the latest version!"
         Write-Host "📱 Existing clients will receive automatic update notifications"
