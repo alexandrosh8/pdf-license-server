@@ -12,6 +12,19 @@ Version: 6.1.0 - Enhanced Flask 3.0+ Edition with GitHub Auto-Deploy
 - Enhanced file upload and build system
 - Real-time client update notifications
 - Improved security and performance
+- Full hardware ID display
+- Environment-only authentication
+
+⚙️ REQUIRED ENVIRONMENT VARIABLES:
+- ADMIN_USERNAME: Admin login username
+- ADMIN_PASSWORD: Admin login password
+
+🔧 OPTIONAL ENVIRONMENT VARIABLES:
+- SECRET_KEY: Flask secret key (auto-generated if not set)
+- GITHUB_TOKEN: GitHub Personal Access Token for auto-deploy
+- GITHUB_REPO: GitHub repository (format: username/repo-name)
+- GITHUB_BRANCH: Git branch (default: main)
+- DATABASE_URL: PostgreSQL connection string (uses SQLite if not set)
 """
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for, flash, session
@@ -41,9 +54,15 @@ import shutil
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_urlsafe(32))
 
-# Admin credentials from environment variables
-ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'changeme123')
+# Admin credentials from environment variables (required)
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+
+# Validate that admin credentials are set
+if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+    logger.error("❌ ADMIN_USERNAME and ADMIN_PASSWORD environment variables must be set!")
+    logger.error("Please set these environment variables before running the server.")
+    sys.exit(1)
 
 # GitHub Integration (set these in environment variables)
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')  # GitHub Personal Access Token
@@ -2006,9 +2025,10 @@ ENHANCED_ADMIN_HTML = '''
             border-radius: 0.25rem;
             font-size: 0.75rem;
             color: #065f46;
-            max-width: 200px;
             word-break: break-all;
             border: 1px solid #bbf7d0;
+            max-width: 300px;
+            overflow-wrap: break-word;
         }
 
         .customer-info {
@@ -2320,7 +2340,7 @@ ENHANCED_ADMIN_HTML = '''
                                     </td>
                                     <td>
                                         {% if license.hardware_id %}
-                                            <div class="hardware-id">{{ license.hardware_id[:16] }}...</div>
+                                            <div class="hardware-id">{{ license.hardware_id }}</div>
                                         {% else %}
                                             <span style="color: var(--text-secondary); font-style: italic;">Not bound</span>
                                         {% endif %}
@@ -2437,7 +2457,7 @@ ENHANCED_ADMIN_HTML = '''
                                     </td>
                                     <td>
                                         {% if validation.hardware_id %}
-                                            <span class="hardware-id">{{ validation.hardware_id[:16] }}...</span>
+                                            <span class="hardware-id">{{ validation.hardware_id }}</span>
                                         {% else %}
                                             <span style="color: var(--text-secondary);">N/A</span>
                                         {% endif %}
