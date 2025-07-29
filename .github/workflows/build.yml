@@ -26,6 +26,8 @@ jobs:
       CI: true
       GITHUB_ACTIONS: true
       BUILD_MODE: true
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: 1
     
     steps:
     - uses: actions/checkout@v4
@@ -35,50 +37,45 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install dependencies with error handling
+    - name: Install dependencies with fixed Unicode handling
       run: |
-        echo "🔧 Installing dependencies..."
+        echo "Installing dependencies..."
         python -m pip install --upgrade pip
         
-        echo "📦 Installing PyInstaller..."
+        echo "Installing PyInstaller..."
         pip install pyinstaller
         
-        echo "📦 Installing core dependencies..."
+        echo "Installing core dependencies..."
         pip install aiohttp aiofiles requests psutil cryptography pywin32
         
-        echo "📦 Installing PDF processing (CRITICAL)..."
+        echo "Installing PDF processing (CRITICAL)..."
         pip install pikepdf
         
-        echo "📦 Installing additional PDF dependencies..."
+        echo "Installing additional PDF dependencies..."
         pip install pillow PyPDF2 pypdf pymupdf reportlab urllib3 certifi
         pip install packaging setuptools wheel
         
-        echo "✅ All dependencies installed successfully"
+        echo "All dependencies installed successfully"
         
-        echo "🔍 Verifying critical dependencies:"
-        try {
-          python -c "import pikepdf; print('✅ pikepdf:', pikepdf.__version__)"
-          python -c "import aiohttp; print('✅ aiohttp:', aiohttp.__version__)"
-          python -c "import cryptography; print('✅ cryptography:', cryptography.__version__)"
-          python -c "import pyinstaller; print('✅ pyinstaller available')"
-        } catch {
-          echo "❌ Dependency verification failed: $($_.Exception.Message)"
-          exit 1
-        }
+        echo "Verifying critical dependencies:"
+        python -c "import pikepdf; print('pikepdf version:', pikepdf.__version__)"
+        python -c "import aiohttp; print('aiohttp version:', aiohttp.__version__)"  
+        python -c "import cryptography; print('cryptography version:', cryptography.__version__)"
+        pyinstaller --version
       shell: pwsh
 
     - name: Verify client.py exists and show info
       run: |
         if (Test-Path "client.py") {
-          echo "✅ client.py found"
+          echo "client.py found"
           $size = (Get-Item "client.py").Length
-          echo "📄 File size: $([math]::Round($size / 1KB, 2)) KB"
+          echo "File size: $([math]::Round($size / 1KB, 2)) KB"
           
-          echo "📋 First few lines of client.py:"
+          echo "First few lines of client.py:"
           Get-Content "client.py" -TotalCount 10
         } else {
-          echo "❌ client.py not found!"
-          echo "📁 Contents of current directory:"
+          echo "ERROR: client.py not found!"
+          echo "Contents of current directory:"
           Get-ChildItem
           exit 1
         }
@@ -89,13 +86,13 @@ jobs:
       run: |
         if ("${{ github.event.inputs.version }}" -ne "") {
           echo "VERSION=${{ github.event.inputs.version }}" >> $env:GITHUB_OUTPUT
-          echo "🏷️ Using manual version: ${{ github.event.inputs.version }}"
+          echo "Using manual version: ${{ github.event.inputs.version }}"
         } else {
           $date = Get-Date -Format "yyyy.MM.dd"
           $run = "${{ github.run_number }}"
           $version = "v$date.$run"
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-          echo "🏷️ Auto-generated version: $version"
+          echo "Auto-generated version: $version"
         }
       shell: pwsh
 
@@ -109,57 +106,63 @@ jobs:
           $content = $content -replace '__version__\s*=\s*"[^"]*"', '__version__ = "${{ steps.version.outputs.VERSION }}"'
           
           Set-Content client.py $content -Encoding UTF8
-          echo "✅ Updated version in file: ${{ steps.version.outputs.VERSION }}"
+          echo "Updated version in file: ${{ steps.version.outputs.VERSION }}"
         }
       shell: pwsh
 
     - name: Test client.py in build mode with enhanced error handling
       run: |
-        echo "🧪 Testing client.py in BUILD MODE..."
-        echo "🔍 Environment variables:"
+        echo "Testing client.py in BUILD MODE..."
+        echo "Environment variables:"
         echo "   CI: $env:CI"
         echo "   GITHUB_ACTIONS: $env:GITHUB_ACTIONS"  
         echo "   BUILD_MODE: $env:BUILD_MODE"
-        echo "🐍 Python info:"
+        echo "Python info:"
         python --version
-        echo "📁 Current directory: $(pwd)"
+        echo "Current directory: $(pwd)"
         
-        echo "🚀 Attempting to run client.py..."
+        echo "Attempting to run client.py..."
         try {
+          # Set UTF-8 encoding for this execution
+          $env:PYTHONIOENCODING = "utf-8"
+          $env:PYTHONUTF8 = "1"
+          
           # Run with timeout and capture output
           $output = python client.py 2>&1
-          echo "📋 Python script output:"
+          echo "Python script output:"
           echo $output
-          echo "✅ Python script executed successfully"
+          echo "Python script executed successfully"
         } catch {
-          echo "❌ Python script failed: $($_.Exception.Message)"
-          echo "📋 Attempting to show any error details..."
+          echo "Python script failed: $($_.Exception.Message)"
+          echo "Attempting to show any error details..."
           python client.py
           exit 1
         }
       shell: pwsh
       env:
         BUILD_MODE: true
+        PYTHONIOENCODING: utf-8
+        PYTHONUTF8: 1
 
     - name: Build EXE with enhanced error handling
       run: |
-        echo "🚀 Building production executable..."
-        echo "📁 Current directory: $(pwd)"
-        echo "🐍 Python location: $(which python)"
+        echo "Building production executable..."
+        echo "Current directory: $(pwd)"
+        echo "Python location: $(where python)"
         python --version
         
         $exeName = "PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}"
-        echo "🏗️ Building: $exeName"
+        echo "Building: $exeName"
         
-        echo "🔍 Pre-build checks:"
+        echo "Pre-build checks:"
         if (Test-Path "client.py") {
-          echo "✅ client.py exists"
+          echo "client.py exists"
         } else {
-          echo "❌ client.py missing!"
+          echo "ERROR: client.py missing!"
           exit 1
         }
         
-        echo "🔧 Running PyInstaller..."
+        echo "Running PyInstaller..."
         pyinstaller --onefile `
           --name $exeName `
           --console `
@@ -190,31 +193,31 @@ jobs:
           --noupx `
           client.py
           
-        echo "📊 PyInstaller exit code: $LASTEXITCODE"
+        echo "PyInstaller exit code: $LASTEXITCODE"
         
         if ($LASTEXITCODE -ne 0) {
-          echo "❌ PyInstaller failed with exit code: $LASTEXITCODE"
+          echo "ERROR: PyInstaller failed with exit code: $LASTEXITCODE"
           
-          echo "📋 Contents of current directory:"
+          echo "Contents of current directory:"
           Get-ChildItem
           
-          echo "📋 Contents of dist directory (if exists):"
+          echo "Contents of dist directory (if exists):"
           if (Test-Path "dist") { 
             Get-ChildItem "dist" -Recurse 
           } else {
-            echo "❌ dist directory doesn't exist"
+            echo "dist directory doesn't exist"
           }
           
-          echo "📋 Contents of build directory (if exists):"  
+          echo "Contents of build directory (if exists):"  
           if (Test-Path "build") {
             Get-ChildItem "build" -Recurse
           } else {
-            echo "❌ build directory doesn't exist"
+            echo "build directory doesn't exist"
           }
           
-          echo "📋 Looking for PyInstaller log files..."
+          echo "Looking for PyInstaller log files..."
           Get-ChildItem -Recurse -Filter "*.log" | ForEach-Object {
-            echo "📄 Log file: $($_.FullName)"
+            echo "Log file: $($_.FullName)"
             Get-Content $_.FullName -Tail 50
           }
           
@@ -225,39 +228,41 @@ jobs:
         if (Test-Path $exePath) {
           $size = (Get-Item $exePath).Length
           $sizeMB = [math]::Round($size / 1MB, 2)
-          echo "✅ Build successful! File: $exePath"
-          echo "📊 File size: $sizeMB MB"
+          echo "Build successful! File: $exePath"
+          echo "File size: $sizeMB MB"
         } else {
-          echo "❌ Build failed - executable not found!"
-          echo "📋 Contents of dist directory:"
+          echo "ERROR: Build failed - executable not found!"
+          echo "Contents of dist directory:"
           if (Test-Path "dist") { Get-ChildItem "dist" }
           exit 1
         }
       shell: pwsh
+      env:
+        PYTHONIOENCODING: utf-8
+        PYTHONUTF8: 1
 
     - name: Test production executable
       run: |
         $exePath = "dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
         
-        echo "🧪 Testing production executable..."
+        echo "Testing production executable..."
         
         # Test PE signature
         $signature = Get-Content $exePath -AsByteStream -TotalCount 2
         if ($signature[0] -eq 77 -and $signature[1] -eq 90) {
-          echo "✅ Valid PE executable format"
+          echo "Valid PE executable format"
         } else {
-          echo "❌ Invalid executable format"
+          echo "Invalid executable format"
           exit 1
         }
         
         $fileInfo = Get-Item $exePath
-        echo "📋 Final executable details:"
+        echo "Final executable details:"
         echo "   Size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
         echo "   Created: $($fileInfo.CreationTime)"
-        echo "✅ Executable test completed"
+        echo "Executable test completed"
       shell: pwsh
 
-    # Continue with release creation...
     - name: Create Release  
       id: create_release
       uses: softprops/action-gh-release@v1
@@ -265,20 +270,93 @@ jobs:
         tag_name: ${{ steps.version.outputs.VERSION }}
         name: PDF Metadata Tool ${{ steps.version.outputs.VERSION }}
         body: |
-          ## 🚀 PDF Metadata Tool ${{ steps.version.outputs.VERSION }}
+          ## PDF Metadata Tool ${{ steps.version.outputs.VERSION }}
           
-          ### ✨ What's Fixed
-          - ✅ **FIXED:** Full PDF processing capabilities (pikepdf included)
-          - ✅ **FIXED:** Enhanced build process with better error handling
-          - ✅ **FIXED:** Complete dependency packaging
+          ### What's Fixed
+          - FIXED: Full PDF processing capabilities (pikepdf included)
+          - FIXED: Unicode encoding issues in build process
+          - FIXED: Enhanced build process with better error handling
+          - FIXED: Complete dependency packaging
           
-          ### 🔧 Features  
-          - 📄 Full PDF metadata restoration
-          - 🔐 PDF encryption/decryption support
-          - 📅 Exact timestamp preservation
-          - 🔄 3-folder workflow (original → edited → final)
+          ### Features  
+          - Full PDF metadata restoration
+          - PDF encryption/decryption support
+          - Exact timestamp preservation
+          - 3-folder workflow (original → edited → final)
+          
+          ### Installation
+          1. Download the executable file below
+          2. Run the application directly (double-click or from command line)
+          3. Enter your license key when prompted
+          4. Start using the PDF Metadata Tool!
+          
+          ### System Requirements
+          - Windows 10/11 (64-bit recommended)
+          - No additional software installation required
+          - Valid license key required
         files: ./dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe
         draft: false
         prerelease: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Notify License Server
+      run: |
+        $body = @{
+          version = "${{ steps.version.outputs.VERSION }}"
+          download_url = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
+          release_date = Get-Date -Format "yyyy-MM-dd'T'HH:mm:ss'Z'"
+          build_number = "${{ github.run_number }}"
+          commit_sha = "${{ github.sha }}"
+          filename = "PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
+          release_url = "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}"
+        } | ConvertTo-Json -Depth 3
+        
+        $notification_endpoints = @(
+          "https://pdf-license-server-dmyx.onrender.com/api/release-notification"
+        )
+        
+        if ("${{ secrets.LICENSE_SERVER_URL }}" -ne "") {
+          $notification_endpoints = @("${{ secrets.LICENSE_SERVER_URL }}/api/release-notification") + $notification_endpoints
+        }
+        
+        $headers = @{
+          "Content-Type" = "application/json"
+          "User-Agent" = "GitHub-Actions-PDF-Builder/1.0"
+        }
+        
+        if ("${{ secrets.WEBHOOK_SECRET }}" -ne "") {
+          $headers["X-GitHub-Token"] = "${{ secrets.WEBHOOK_SECRET }}"
+        }
+        
+        $notification_success = $false
+        
+        foreach ($endpoint in $notification_endpoints) {
+          if ($endpoint -eq "") { continue }
+          
+          echo "Notifying license server: $endpoint"
+          
+          try {
+            $response = Invoke-RestMethod -Uri $endpoint -Method POST -Body $body -Headers $headers -TimeoutSec 30
+            echo "Successfully notified license server!"
+            echo "Response: $($response | ConvertTo-Json -Compress)"
+            $notification_success = $true
+            break
+          } catch {
+            echo "Failed to notify $endpoint : $($_.Exception.Message)"
+            continue
+          }
+        }
+        
+        echo ""
+        echo "BUILD SUMMARY:"
+        echo "=============="
+        echo "Version: ${{ steps.version.outputs.VERSION }}"
+        echo "Download: https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
+        echo "Release: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.VERSION }}"
+        if ($notification_success) {
+          echo "License server notified: SUCCESS"
+        } else {
+          echo "License server notification: FAILED (non-critical)"
+        }
+      shell: pwsh
