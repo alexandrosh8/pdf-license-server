@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-🔐 PDF Metadata Tool v2.3.3 Professional - ENHANCED EDITION
+🔐 PDF Metadata Tool v2.3.0 Professional - ENHANCED EDITION
 ============================================================
 Enterprise-grade PDF metadata restoration with secure licensing and auto-updates
 Contact: halexandros25@gmail.com
 
-🚀 PROFESSIONAL FEATURES v2.3.3:
+🚀 PROFESSIONAL FEATURES v2.3.0:
 - FIXED: Build mode detection - no more BUILD_MODE for end users
 - FIXED: Unicode logging errors on Windows systems
 - Modern Material Design UI with progress indicators
@@ -157,9 +157,9 @@ if platform.system() == "Windows":
 else:
     WIN32_AVAILABLE = False
 
-# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.1 =====
-VERSION = "v2.3.1"
-__version__ = "2.3.1"  # For compatibility with GitHub workflow
+# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.2 =====
+VERSION = "v2.3.2"
+__version__ = "2.3.2"  # For compatibility with GitHub workflow
 BUILD_DATE = "2024-01-01"  # Auto-updated by GitHub workflow
 BUILD_TYPE = "release"     # Auto-updated by GitHub workflow
 
@@ -1695,6 +1695,13 @@ class PDFMetadataTool:
         print(f"   Original:  {self.processor.original_dir}")
         print(f"   Edited:    {self.processor.edited_dir}")  
         print(f"   Final:     {self.processor.final_dir}")
+        
+        # Check if we have the new workflow available
+        if PIKEPDF_AVAILABLE:
+            print(f"\n🔄 Workflow: Advanced 3-folder PDF metadata restoration")
+        else:
+            print(f"\n⚠️  Workflow: Basic processing only (install pikepdf for full features)")
+            print(f"   📋 To install: pip install pikepdf")
     
 
     
