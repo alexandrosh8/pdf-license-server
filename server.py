@@ -196,8 +196,8 @@ class GitHubDeployment:
         else:
             raise Exception(f"Release creation failed: {response.status_code} - {response.text}")
     
-    def trigger_build_workflow(self):
-        """Trigger GitHub Actions workflow for building executable"""
+    def trigger_build_workflow(self, version_tag=None):
+        """Trigger GitHub Actions workflow for building executable with correct inputs"""
         if not self.token:
             raise Exception("GitHub token not configured")
         
@@ -207,20 +207,30 @@ class GitHubDeployment:
             "Content-Type": "application/json"
         }
         
+        # Use correct workflow inputs that match build.yml
         workflow_data = {
             "ref": self.branch,
-            "inputs": {
-                "build_client": "true"
-            }
+            "inputs": {}
         }
+        
+        # Add version input if provided (matches workflow input name)
+        if version_tag:
+            workflow_data["inputs"]["version"] = version_tag
         
         url = f"{self.base_url}/repos/{self.repo}/actions/workflows/build.yml/dispatches"
         response = requests.post(url, headers=headers, json=workflow_data)
         
         if response.status_code == 204:
-            return {"success": True, "message": "Build workflow triggered"}
+            return {"success": True, "message": "Build workflow triggered successfully"}
         else:
-            raise Exception(f"Workflow trigger failed: {response.status_code} - {response.text}")
+            # Better error handling with response details
+            error_details = f"Status: {response.status_code}"
+            try:
+                error_json = response.json()
+                error_details += f", Message: {error_json.get('message', 'Unknown error')}"
+            except:
+                error_details += f", Response: {response.text[:200]}"
+            raise Exception(f"Workflow trigger failed: {error_details}")
 
 # =============================================================================
 # PROFESSIONAL JINJA2 FILTERS (Enhanced)
@@ -959,11 +969,11 @@ def upload_client_file():
         
         # Try to trigger build (optional)
         try:
-            build_result = github.trigger_build_workflow()
+            build_result = github.trigger_build_workflow(version_tag)
             flash(f'✅ Client uploaded to GitHub and build triggered! Version: {version_tag}', 'success')
         except Exception as e:
             logger.warning(f"Build trigger failed: {e}")
-            flash(f'✅ Client uploaded to GitHub! Version: {version_tag} (Manual build required)', 'success')
+            flash(f'✅ Client uploaded to GitHub! Version: {version_tag} (Manual build may be required)', 'success')
         
     except Exception as e:
         logger.error(f"Client upload failed: {e}")
@@ -2991,6 +3001,20 @@ ENHANCED_REPAIR_HTML = '''
 </html>
 '''
 
+# =============================================================================
+# PRODUCTION DEPLOYMENT CONFIGURATION
+# =============================================================================
+
+def create_app():
+    """Application factory for production deployment"""
+    # Initialize database for production
+    with app.app_context():
+        initialize_database_on_startup()
+    return app
+
+# For Render.com/Heroku/Gunicorn compatibility - create 'application' variable
+application = app
+
 if __name__ == '__main__':
     # Initialize database when running locally with app context
     with app.app_context():
@@ -2998,8 +3022,9 @@ if __name__ == '__main__':
     
     # This block only runs during local development
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
-
-# Initialize database on startup for production (with app context)
-with app.app_context():
-    initialize_database_on_startup()
+    app.run(host='0.0.0.0', port=port, debug=False)
+else:
+    # Production initialization - called when imported by Gunicorn
+    logger.info("🚀 Production mode - initializing for deployment...")
+    with app.app_context():
+        initialize_database_on_startup()
