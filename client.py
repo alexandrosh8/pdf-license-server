@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-🔐 PDF Metadata Tool v2.3.0 Professional - ENHANCED EDITION
+🔐 PDF Metadata Tool v2.3.4 Professional - FIXED EDITION
 ============================================================
 Enterprise-grade PDF metadata restoration with secure licensing and auto-updates
 Contact: halexandros25@gmail.com
 
-🚀 PROFESSIONAL FEATURES v2.3.0:
+🚀 PROFESSIONAL FEATURES v2.3.4:
 - FIXED: Build mode detection - no more BUILD_MODE for end users
 - FIXED: Unicode logging errors on Windows systems
+- FIXED: Integrated 3-folder workflow (original → edited → final)
+- FIXED: Actual PDF metadata restoration with pikepdf
 - Modern Material Design UI with progress indicators
 - Advanced PDF metadata restoration algorithms
 - Smart auto-update system with GitHub integration
@@ -43,6 +45,7 @@ This file requires the following hidden imports for PyInstaller:
 --hidden-import=win32con
 --hidden-import=win32gui
 --hidden-import=pywintypes
+--hidden-import=pikepdf
 """
 
 # ===== CRITICAL IMPORTS - MUST BE FIRST =====
@@ -117,7 +120,7 @@ try:
     import tempfile
     import zipfile
     from pathlib import Path
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     import threading
     from concurrent.futures import ThreadPoolExecutor
     import signal
@@ -149,17 +152,21 @@ if platform.system() == "Windows":
         import win32con
         import win32gui
         import pywintypes
+        import win32file
         WIN32_AVAILABLE = True
+        WIN32_TIMESTAMP_AVAILABLE = True
     except ImportError:
         WIN32_AVAILABLE = False
+        WIN32_TIMESTAMP_AVAILABLE = False
         if not BUILD_MODE:
             print("Windows API modules not available - some Windows features disabled")
 else:
     WIN32_AVAILABLE = False
+    WIN32_TIMESTAMP_AVAILABLE = False
 
-# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.2 =====
-VERSION = "v2.3.2"
-__version__ = "2.3.2"  # For compatibility with GitHub workflow
+# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.4 =====
+VERSION = "v2.3.4"
+__version__ = "2.3.4"  # For compatibility with GitHub workflow
 BUILD_DATE = "2024-01-01"  # Auto-updated by GitHub workflow
 BUILD_TYPE = "release"     # Auto-updated by GitHub workflow
 
@@ -186,18 +193,6 @@ except ImportError as e:
     if not BUILD_MODE:
         print(f"PDF processing not available: {e}")
         print("Please install: pip install pikepdf")
-
-# ===== WIN32 IMPORTS FOR TIMESTAMP HANDLING =====
-try:
-    if platform.system() == "Windows":
-        import win32file
-        import win32api
-        import pywintypes
-        WIN32_TIMESTAMP_AVAILABLE = True
-    else:
-        WIN32_TIMESTAMP_AVAILABLE = False
-except ImportError:
-    WIN32_TIMESTAMP_AVAILABLE = False
 
 # ===== ENHANCED LOGGING CONFIGURATION WITH UNICODE FIX =====
 class ColoredFormatter(logging.Formatter):
@@ -284,7 +279,14 @@ def safe_log_message(message):
         '👋': '[GOODBYE]',
         '💡': '[TIP]',
         '📄': '[FILE]',
-        '📂': '[FOLDER]'
+        '📂': '[FOLDER]',
+        '🕒': '[TIME]',
+        '📅': '[DATE]',
+        '🔒': '[LOCK]',
+        '🔓': '[UNLOCK]',
+        '✨': '[SPARKLE]',
+        '🤔': '[THINK]',
+        '⚙️': '[GEAR]'
     }
     
     safe_message = str(message)
@@ -1251,13 +1253,464 @@ del "%~f0" >nul 2>&1
             print(f"Zip extraction failed: {e}")
             await self._show_manual_update_instructions(download_path, version)
 
+# ===== PDF PROCESSING CLASSES - INTEGRATED FROM SECOND SCRIPT =====
+
+def generate_random_password(length=12):
+    """Generate a random password for encryption."""
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+def detect_pdf_security(pdf_file):
+    """Detect both user password and owner password/permissions protection."""
+    security_info = {
+        'has_user_password': False,
+        'has_owner_restrictions': False,
+        'can_open': False,
+        'can_modify': True,
+        'encryption_present': False,
+        'pdf_version': '1.4',
+        'estimated_R': 4,
+        'estimated_V': 2
+    }
+    
+    try:
+        # Try to open the file
+        with pikepdf.open(pdf_file) as pdf:
+            security_info['can_open'] = True
+            security_info['pdf_version'] = pdf.pdf_version
+            
+            # Check if file has encryption dictionary
+            if hasattr(pdf, 'encryption') and pdf.encryption:
+                security_info['encryption_present'] = True
+                try:
+                    # Get encryption parameters
+                    encryption = pdf.encryption
+                    security_info['estimated_R'] = getattr(encryption, 'R', 4)
+                    security_info['estimated_V'] = getattr(encryption, 'V', 2)
+                except:
+                    pass
+            
+            # Check for explicit encryption object
+            if '/Encrypt' in pdf.trailer:
+                security_info['encryption_present'] = True
+            
+            # Check actual permissions
+            try:
+                if hasattr(pdf, 'allow'):
+                    perms = pdf.allow
+                    if not (perms.modify_other and perms.modify_annotation and perms.modify_form):
+                        security_info['has_owner_restrictions'] = True
+                        security_info['can_modify'] = False
+                    else:
+                        security_info['has_owner_restrictions'] = False
+                        security_info['can_modify'] = True
+                else:
+                    security_info['has_owner_restrictions'] = False
+                    security_info['can_modify'] = True
+            except Exception as e:
+                if security_info['encryption_present']:
+                    security_info['has_owner_restrictions'] = False
+                    security_info['can_modify'] = True
+                
+    except pikepdf.PasswordError:
+        security_info['has_user_password'] = True
+        security_info['encryption_present'] = True
+        
+        # Try to get PDF version from header even if encrypted
+        try:
+            with open(pdf_file, 'rb') as f:
+                header = f.read(1024).decode('utf-8', errors='ignore')
+                version_match = re.search(r'%PDF-(\d+\.\d+)', header)
+                if version_match:
+                    security_info['pdf_version'] = version_match.group(1)
+                    
+                    # Estimate encryption based on PDF version
+                    pdf_version = security_info['pdf_version']
+                    if pdf_version >= '2.0':
+                        security_info['estimated_R'] = 6
+                        security_info['estimated_V'] = 5
+                    elif pdf_version >= '1.7':
+                        security_info['estimated_R'] = 6
+                        security_info['estimated_V'] = 5
+                    elif pdf_version >= '1.6':
+                        security_info['estimated_R'] = 4
+                        security_info['estimated_V'] = 4
+                    elif pdf_version >= '1.4':
+                        security_info['estimated_R'] = 3
+                        security_info['estimated_V'] = 2
+                    else:
+                        security_info['estimated_R'] = 2
+                        security_info['estimated_V'] = 1
+        except:
+            pass
+    
+    except Exception as e:
+        logger.error(f"Error analyzing PDF security: {e}")
+    
+    has_meaningful_protection = (security_info['has_user_password'] or 
+                                security_info['has_owner_restrictions'])
+    
+    security_info['needs_encryption'] = has_meaningful_protection
+    
+    return security_info
+
+def extract_comprehensive_metadata(pdf_file, password=''):
+    """Extract all types of metadata from a PDF file, including exact timestamps."""
+    try:
+        with pikepdf.open(pdf_file, password=password) as pdf:
+            metadata = {
+                'visible': {},
+                'xmp': None,
+                'has_digital_signatures': False,
+                'has_form_fields': False,
+                'pdf_version': pdf.pdf_version,
+                'page_count': len(pdf.pages),
+                'raw_dates': {}  # Store raw date strings
+            }
+            
+            # Extract visible metadata (Document Info Dictionary)
+            for k, v in pdf.docinfo.items():
+                key = k[1:]  # Remove leading /
+                value = str(v)
+                metadata['visible'][key] = value
+                
+                # Store raw date values for exact preservation
+                if key in ['CreationDate', 'ModDate']:
+                    # pikepdf returns the raw string, which we want to preserve exactly
+                    metadata['raw_dates'][key] = v
+            
+            # Extract XMP metadata
+            if '/Metadata' in pdf.Root:
+                try:
+                    xmp_bytes = pdf.Root.Metadata.read_bytes()
+                    metadata['xmp'] = xmp_bytes.decode('utf-8', errors='ignore')
+                    metadata['xmp_bytes'] = xmp_bytes  # Store raw bytes for exact preservation
+                except Exception:
+                    pass
+            
+            # Check for digital signatures
+            if '/AcroForm' in pdf.Root:
+                acro_form = pdf.Root['/AcroForm']
+                if '/SigFlags' in acro_form:
+                    metadata['has_digital_signatures'] = True
+                if '/Fields' in acro_form:
+                    metadata['has_form_fields'] = True
+            
+            # Check for page-level metadata
+            page_metadata = []
+            for i, page in enumerate(pdf.pages):
+                if '/Metadata' in page:
+                    page_metadata.append(i)
+            if page_metadata:
+                metadata['pages_with_metadata'] = page_metadata
+            
+            return metadata
+            
+    except pikepdf.PasswordError:
+        return None
+
+def create_default_metadata():
+    """Create default metadata when original cannot be accessed."""
+    current_time = datetime.now(timezone.utc).strftime("D:%Y%m%d%H%M%S+00'00'")
+    
+    return {
+        'Title': 'Document',
+        'Author': 'Unknown',
+        'Subject': '',
+        'Keywords': '',
+        'Creator': 'PDF Application',
+        'Producer': 'PDF Library',
+        'CreationDate': current_time,
+        'ModDate': current_time,
+        'Trapped': '/False'
+    }
+
+def update_xmp_dates(xmp_string, creation_date, mod_date):
+    """Update XMP metadata to match the visible metadata dates."""
+    if not xmp_string:
+        return None
+    
+    try:
+        # Parse XMP
+        xmp_string = xmp_string.strip()
+        
+        # Convert PDF date format to XMP format
+        # PDF: D:20240315120000+00'00'
+        # XMP: 2024-03-15T12:00:00+00:00
+        def pdf_to_xmp_date(pdf_date):
+            # Remove D: prefix
+            if pdf_date.startswith('D:'):
+                pdf_date = pdf_date[2:]
+            
+            # Parse components
+            year = pdf_date[0:4]
+            month = pdf_date[4:6]
+            day = pdf_date[6:8]
+            hour = pdf_date[8:10] if len(pdf_date) > 8 else '00'
+            minute = pdf_date[10:12] if len(pdf_date) > 10 else '00'
+            second = pdf_date[12:14] if len(pdf_date) > 12 else '00'
+            
+            # Handle timezone
+            tz = '+00:00'  # Default
+            if '+' in pdf_date or '-' in pdf_date:
+                tz_start = pdf_date.find('+') if '+' in pdf_date else pdf_date.find('-')
+                tz_part = pdf_date[tz_start:]
+                # Convert +00'00' to +00:00
+                tz = tz_part.replace("'", ":")
+            
+            return f"{year}-{month}-{day}T{hour}:{minute}:{second}{tz}"
+        
+        # Replace dates in XMP
+        if isinstance(creation_date, str):
+            xmp_creation = pdf_to_xmp_date(creation_date)
+            # Replace various date formats in XMP
+            xmp_string = re.sub(
+                r'<xmp:CreateDate>[^<]+</xmp:CreateDate>',
+                f'<xmp:CreateDate>{xmp_creation}</xmp:CreateDate>',
+                xmp_string
+            )
+            xmp_string = re.sub(
+                r'xmp:CreateDate="[^"]+"',
+                f'xmp:CreateDate="{xmp_creation}"',
+                xmp_string
+            )
+        
+        if isinstance(mod_date, str):
+            xmp_mod = pdf_to_xmp_date(mod_date)
+            # Replace various date formats in XMP
+            xmp_string = re.sub(
+                r'<xmp:ModifyDate>[^<]+</xmp:ModifyDate>',
+                f'<xmp:ModifyDate>{xmp_mod}</xmp:ModifyDate>',
+                xmp_string
+            )
+            xmp_string = re.sub(
+                r'xmp:ModifyDate="[^"]+"',
+                f'xmp:ModifyDate="{xmp_mod}"',
+                xmp_string
+            )
+            # Also update MetadataDate
+            xmp_string = re.sub(
+                r'<xmp:MetadataDate>[^<]+</xmp:MetadataDate>',
+                f'<xmp:MetadataDate>{xmp_mod}</xmp:MetadataDate>',
+                xmp_string
+            )
+            xmp_string = re.sub(
+                r'xmp:MetadataDate="[^"]+"',
+                f'xmp:MetadataDate="{xmp_mod}"',
+                xmp_string
+            )
+        
+        return xmp_string
+        
+    except Exception as e:
+        logger.warning(f"Could not update XMP dates: {e}")
+        return xmp_string
+
+def try_common_passwords(pdf_file):
+    """Try common passwords that might work."""
+    common_passwords = ['', '123456', 'password', 'admin', 'user', '1234', 'pdf']
+    
+    for password in common_passwords:
+        try:
+            with pikepdf.open(pdf_file, password=password) as pdf:
+                return password
+        except pikepdf.PasswordError:
+            continue
+    
+    return None
+
+def get_original_file_timestamps(filepath):
+    """Extract file system timestamps from the original file as backup."""
+    try:
+        stat_result = os.stat(filepath)
+        timestamps = {
+            'creation': stat_result.st_ctime,
+            'modification': stat_result.st_mtime, 
+            'access': stat_result.st_atime
+        }
+        
+        return timestamps
+        
+    except Exception as e:
+        logger.warning(f"Could not read original file timestamps: {e}")
+        return None
+
+def pdf_date_to_timestamp(pdf_date_str):
+    """Convert PDF date string to Unix timestamp for file system."""
+    if not pdf_date_str:
+        return None
+    
+    try:
+        # Handle pikepdf date objects
+        date_string = None
+        
+        # Try different ways to extract the date string
+        try:
+            date_string = str(pdf_date_str)
+        except Exception:
+            pass
+        
+        if not date_string and hasattr(pdf_date_str, 'for_pdf_string'):
+            try:
+                date_string = pdf_date_str.for_pdf_string()
+            except Exception:
+                pass
+        
+        if not date_string and hasattr(pdf_date_str, 'unbox'):
+            try:
+                unboxed = pdf_date_str.unbox()
+                date_string = str(unboxed)
+            except Exception:
+                pass
+        
+        if not date_string and isinstance(pdf_date_str, str):
+            date_string = pdf_date_str
+        
+        if not date_string:
+            return None
+        
+        # Clean up the date string
+        pdf_date_str = date_string
+        
+        # Remove D: prefix if present
+        if pdf_date_str.startswith('D:'):
+            pdf_date_str = pdf_date_str[2:]
+        
+        # Clean up the date string - remove extra quotes and normalize
+        pdf_date_str = pdf_date_str.replace("''", "'").strip("'\"")
+        
+        # Parse the PDF date format: YYYYMMDDHHmmSSOHH'mm' or YYYYMMDDHHmmSSZ
+        if len(pdf_date_str) < 14:
+            return None
+            
+        year = int(pdf_date_str[0:4])
+        month = int(pdf_date_str[4:6])
+        day = int(pdf_date_str[6:8])
+        hour = int(pdf_date_str[8:10]) if len(pdf_date_str) > 8 else 0
+        minute = int(pdf_date_str[10:12]) if len(pdf_date_str) > 10 else 0
+        second = int(pdf_date_str[12:14]) if len(pdf_date_str) > 12 else 0
+        
+        # Create datetime object - treat as local time regardless of timezone markers
+        dt_local = datetime(year, month, day, hour, minute, second)
+        
+        # Convert local time to UTC timestamp for os.utime()
+        local_timestamp = time.mktime(dt_local.timetuple())
+        
+        return local_timestamp
+        
+    except (ValueError, IndexError, AttributeError, TypeError) as e:
+        logger.warning(f"Could not parse PDF date '{pdf_date_str}': {e}")
+        return None
+
+def set_file_timestamps(filepath, creation_date=None, modification_date=None, original_file_timestamps=None):
+    """Set file system timestamps to match PDF metadata, with protection against modification."""
+    if not os.path.exists(filepath):
+        logger.error(f"File not found: {filepath}")
+        return False
+    
+    try:
+        # Convert PDF dates to timestamps
+        creation_timestamp = None
+        modification_timestamp = None
+        
+        if creation_date:
+            creation_timestamp = pdf_date_to_timestamp(creation_date)
+        
+        if modification_date:
+            modification_timestamp = pdf_date_to_timestamp(modification_date)
+        
+        # Use modification time for both access and modification if available
+        # Otherwise fall back to creation time
+        target_timestamp = modification_timestamp or creation_timestamp
+        
+        # Backup: use original file system timestamps if PDF timestamps failed
+        if not target_timestamp and original_file_timestamps:
+            target_timestamp = original_file_timestamps.get('modification') or original_file_timestamps.get('creation')
+        
+        if target_timestamp:
+            # Store original file attributes
+            original_mode = os.stat(filepath).st_mode
+            
+            try:
+                # First, set only modification time
+                current_stat = os.stat(filepath)
+                os.utime(filepath, (current_stat.st_atime, target_timestamp))
+                
+                # On Windows, set creation time using win32file
+                try:
+                    if platform.system() == 'Windows' and WIN32_TIMESTAMP_AVAILABLE:
+                        # Use creation timestamp if available, otherwise modification
+                        creation_ts = creation_timestamp or modification_timestamp
+                        if not creation_ts and original_file_timestamps:
+                            creation_ts = original_file_timestamps.get('creation') or target_timestamp
+                        
+                        # Convert to Windows FILETIME (using local time)
+                        dt_for_windows = datetime.fromtimestamp(creation_ts)
+                        file_time = pywintypes.Time(dt_for_windows)
+                        
+                        # Open file handle with proper permissions
+                        handle = win32file.CreateFile(
+                            filepath,
+                            win32file.GENERIC_WRITE,
+                            win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
+                            None,
+                            win32file.OPEN_EXISTING,
+                            win32file.FILE_ATTRIBUTE_NORMAL,
+                            None
+                        )
+                        
+                        # Set creation time only
+                        win32file.SetFileTime(handle, file_time, None, None)
+                        win32file.CloseHandle(handle)
+                        
+                except Exception as e:
+                    logger.debug(f"Could not set Windows creation time: {e}")
+                
+                # Set access time last
+                try:
+                    os.utime(filepath, (target_timestamp, target_timestamp))
+                except Exception as access_error:
+                    logger.debug(f"Could not set final access time: {access_error}")
+                
+            except Exception as timestamp_error:
+                logger.error(f"Error setting timestamps: {timestamp_error}")
+                return False
+            
+            return True
+        else:
+            logger.warning("No valid timestamps found to set")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error setting file timestamps: {e}")
+        return False
+
+def safe_remove_file(filepath):
+    """Safely remove a file if it exists."""
+    if os.path.exists(filepath):
+        try:
+            os.remove(filepath)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to remove existing file {filepath}: {e}")
+            try:
+                backup_name = filepath + '.backup'
+                os.rename(filepath, backup_name)
+                logger.info(f"Renamed existing file to: {backup_name}")
+                return True
+            except Exception as rename_error:
+                logger.error(f"Failed to rename existing file: {rename_error}")
+                return False
+    return True
+
 class PDFProcessor:
     """Professional PDF metadata processing engine with PyInstaller compatibility"""
     
     def __init__(self, base_dir):
         self.base_dir = Path(base_dir)
         self.original_dir = self.base_dir / "original"
-        self.processed_dir = self.base_dir / "processed"
+        self.edited_dir = self.base_dir / "edited"
+        self.final_dir = self.base_dir / "final"
         self.stats = {
             'total_files': 0,
             'processed_files': 0,
@@ -1265,22 +1718,46 @@ class PDFProcessor:
             'total_size': 0,
             'processing_time': 0
         }
+        # Processing options
+        self.preserve_exact_timestamps = True
+        self.use_exact_time_match = True
+        self.permanent_read_only = False
+        self.timestamp_source_priority = 1  # 1 = PDF metadata first, 2 = file system first
     
-    def get_file_choice_options(self, pdf_files):
-        """Get file selection options"""
-        options = []
-        for i, pdf_file in enumerate(pdf_files, 1):
-            file_size = self._format_size(pdf_file.stat().st_size)
-            options.append(f"{pdf_file.name} ({file_size})")
-        options.append("Process all files")
-        return options
+    def get_file_pair_options(self):
+        """Get file pairs from original and edited folders"""
+        try:
+            # Get all PDF files from both directories
+            original_files = list(self.original_dir.glob("*.pdf"))
+            edited_files = list(self.edited_dir.glob("*.pdf"))
+            
+            # Create a mapping by filename
+            original_map = {f.name: f for f in original_files}
+            edited_map = {f.name: f for f in edited_files}
+            
+            # Find matching pairs
+            pairs = []
+            for filename in original_map:
+                if filename in edited_map:
+                    pairs.append({
+                        'filename': filename,
+                        'original': original_map[filename],
+                        'edited': edited_map[filename],
+                        'size': self._format_size(original_map[filename].stat().st_size)
+                    })
+            
+            return pairs
+        except Exception as e:
+            logger.error(f"Error scanning for file pairs: {e}")
+            return []
     
-    def get_processing_type_options(self):
-        """Get processing type options"""
+    def get_processing_options_menu(self):
+        """Get processing options for the menu"""
         return [
-            "Keep original metadata (preserve existing)",
-            "Remove metadata (anonymize document)",
-            "Custom metadata restoration"
+            "Preserve exact timestamps (file system + metadata)",
+            "Standard processing (metadata only)",
+            "Remove all metadata (anonymize)",
+            "Custom settings"
         ]
     
     async def process_pdf_files(self):
@@ -1289,44 +1766,46 @@ class PDFProcessor:
             # Create directories with error handling
             try:
                 self.original_dir.mkdir(exist_ok=True)
-                self.processed_dir.mkdir(exist_ok=True)
+                self.edited_dir.mkdir(exist_ok=True)
+                self.final_dir.mkdir(exist_ok=True)
             except Exception as e:
                 logger.error(f"Failed to create directories: {e}")
                 return False
             
             while True:  # Main processing loop
-                # Scan for PDF files
-                try:
-                    pdf_files = list(self.original_dir.glob("*.pdf"))
-                except Exception as e:
-                    logger.error(f"Failed to scan for PDF files: {e}")
-                    return False
+                # Scan for file pairs
+                file_pairs = self.get_file_pair_options()
                 
-                if not pdf_files:
+                if not file_pairs:
                     ProfessionalUI.print_status_box(
-                        "NO FILES FOUND", 
-                        f"No PDF files found in '{self.original_dir}'", 
+                        "NO MATCHING FILES", 
+                        "No matching PDF files found in original and edited folders", 
                         "33"
                     )
-                    print(f"Please place your PDF files in: {self.original_dir}")
+                    print(f"\nPlease ensure:")
+                    print(f"1. Original PDFs are in: {self.original_dir}")
+                    print(f"2. Edited PDFs are in: {self.edited_dir}")
+                    print(f"3. Files have the SAME FILENAME in both folders")
                     
                     choice = ProfessionalUI.get_user_choice(
-                        "Press Enter to scan again, or type 'quit' to exit", 
+                        "\nPress Enter to scan again, or type 'quit' to exit", 
                         ['', 'quit']
                     )
-                    if choice == 'quit' or choice == '':
-                        if choice == '':
-                            continue
+                    if choice == 'quit':
                         return False
                     continue
                 
-                # Display file options
-                ProfessionalUI.print_section("Available PDF Files", "📁")
-                file_options = self.get_file_choice_options(pdf_files)
-                ProfessionalUI.print_menu("Select files to process:", file_options, "📄")
+                # Display file pairs
+                ProfessionalUI.print_section("Matched PDF File Pairs", "📁")
+                options = []
+                for i, pair in enumerate(file_pairs, 1):
+                    options.append(f"{pair['filename']} ({pair['size']})")
+                options.append("Process all file pairs")
+                
+                ProfessionalUI.print_menu("Select files to process:", options, "📄")
                 
                 # Get file selection
-                valid_choices = [str(i) for i in range(1, len(file_options) + 1)]
+                valid_choices = [str(i) for i in range(1, len(options) + 1)]
                 file_choice = ProfessionalUI.get_user_choice(
                     "Enter your choice", 
                     valid_choices
@@ -1335,16 +1814,16 @@ class PDFProcessor:
                 if file_choice == 'quit':
                     return False
                 
-                # Determine selected files
+                # Determine selected pairs
                 file_choice_idx = int(file_choice) - 1
-                if file_choice_idx == len(pdf_files):  # "Process all files"
-                    selected_files = pdf_files
+                if file_choice_idx == len(file_pairs):  # "Process all file pairs"
+                    selected_pairs = file_pairs
                 else:
-                    selected_files = [pdf_files[file_choice_idx]]
+                    selected_pairs = [file_pairs[file_choice_idx]]
                 
                 # Display processing options
                 ProfessionalUI.print_section("Processing Options", "⚙️")
-                processing_options = self.get_processing_type_options()
+                processing_options = self.get_processing_options_menu()
                 ProfessionalUI.print_menu("Select processing type:", processing_options, "🔧")
                 
                 # Get processing type
@@ -1357,10 +1836,21 @@ class PDFProcessor:
                 if proc_choice == 'quit':
                     return False
                 
-                processing_type = processing_options[int(proc_choice) - 1]
+                # Configure processing based on choice
+                if proc_choice == '1':  # Preserve exact timestamps
+                    self.preserve_exact_timestamps = True
+                    self.use_exact_time_match = True
+                elif proc_choice == '2':  # Standard processing
+                    self.preserve_exact_timestamps = False
+                elif proc_choice == '3':  # Remove metadata
+                    self.preserve_exact_timestamps = False
+                    # This would be a different processing path
+                elif proc_choice == '4':  # Custom settings
+                    # Would show custom settings menu
+                    self.preserve_exact_timestamps = True
                 
-                # Process selected files
-                success = await self._process_selected_files(selected_files, processing_type)
+                # Process selected pairs
+                success = await self._process_selected_pairs(selected_pairs, proc_choice)
                 
                 if success:
                     # Ask what to do next
@@ -1399,49 +1889,53 @@ class PDFProcessor:
             print(f"PDF processing error: {e}")
             return False
     
-    async def _process_selected_files(self, selected_files, processing_type):
-        """Process the selected files with the chosen processing type"""
+    async def _process_selected_pairs(self, selected_pairs, processing_type):
+        """Process the selected file pairs"""
         try:
             self.stats = {
-                'total_files': len(selected_files),
+                'total_files': len(selected_pairs),
                 'processed_files': 0,
                 'failed_files': 0,
-                'total_size': sum(f.stat().st_size for f in selected_files),
+                'total_size': sum(p['original'].stat().st_size for p in selected_pairs),
                 'processing_time': 0
             }
             
             ProfessionalUI.print_section("Processing PDF Files", "🔄")
-            print(f"Files to process: {len(selected_files)}")
-            print(f"Processing type: {processing_type}")
+            print(f"Files to process: {len(selected_pairs)}")
             print(f"Total size: {self._format_size(self.stats['total_size'])}")
+            if self.preserve_exact_timestamps:
+                print(f"Timestamp preservation: ENABLED")
             print()
             
             start_time = time.time()
             
             # Process files with progress tracking
-            for i, pdf_file in enumerate(selected_files, 1):
+            for i, pair in enumerate(selected_pairs, 1):
                 try:
-                    print(f"Processing: {pdf_file.name}")
+                    print(f"\nProcessing: {pair['filename']}")
                     
                     # Update progress
                     ProfessionalUI.print_progress_bar(
-                        i - 1, len(selected_files), f"Processing {pdf_file.name[:30]}"
+                        i - 1, len(selected_pairs), f"Processing"
                     )
                     
-                    # Process based on type
-                    await self._process_single_pdf(pdf_file, processing_type)
+                    # Process the PDF pair
+                    success = await self._process_single_pair(pair)
                     
-                    self.stats['processed_files'] += 1
+                    if success:
+                        self.stats['processed_files'] += 1
+                        print(f"✅ Completed: {pair['filename']}")
+                    else:
+                        self.stats['failed_files'] += 1
+                        print(f"❌ Failed: {pair['filename']}")
                     
                     # Update final progress
                     ProfessionalUI.print_progress_bar(
-                        i, len(selected_files), "Processing"
+                        i, len(selected_pairs), "Processing"
                     )
                     
-                    print(f"Completed: {pdf_file.name}")
-                    
                 except Exception as e:
-                    print(f"Failed to process {pdf_file.name}: {e}")
+                    print(f"❌ Failed to process {pair['filename']}: {e}")
                     self.stats['failed_files'] += 1
             
             self.stats['processing_time'] = time.time() - start_time
@@ -1449,44 +1943,171 @@ class PDFProcessor:
             # Display final statistics
             self._display_processing_stats()
             
-            return True
+            return self.stats['processed_files'] > 0
             
         except Exception as e:
             print(f"Batch processing error: {e}")
             return False
     
-    async def _process_single_pdf(self, pdf_file, processing_type):
-        """Process a single PDF file based on processing type"""
+    async def _process_single_pair(self, pair):
+        """Process a single PDF file pair"""
         try:
-            # Simulate processing time
-            await asyncio.sleep(0.1)
+            original_pdf = pair['original']
+            edited_pdf = pair['edited']
+            output_pdf = self.final_dir / pair['filename']
             
-            # Generate output filename based on processing type
-            if "Keep original" in processing_type:
-                suffix = "_original"
-            elif "Remove metadata" in processing_type:
-                suffix = "_anonymized"
+            # Check if output already exists
+            if output_pdf.exists():
+                if not safe_remove_file(output_pdf):
+                    logger.error(f"Cannot overwrite existing output: {output_pdf}")
+                    return False
+            
+            # Also check for existing password file
+            password_file = output_pdf.with_suffix('.pdf.passwords.txt')
+            if password_file.exists():
+                safe_remove_file(password_file)
+            
+            # Detect security settings
+            security_info = detect_pdf_security(original_pdf)
+            
+            # Try to find a working password if needed
+            working_password = try_common_passwords(original_pdf) if security_info['has_user_password'] else ''
+            
+            # Get original file timestamps as backup
+            original_file_timestamps = get_original_file_timestamps(original_pdf)
+            
+            # Extract metadata
+            original_metadata = None
+            original_visible_metadata = {}
+            original_xmp_metadata = None
+            raw_dates = {}
+            
+            if not security_info['has_user_password'] or working_password is not None:
+                # We can access the original file
+                original_metadata = extract_comprehensive_metadata(original_pdf, working_password)
+                if original_metadata:
+                    original_visible_metadata = original_metadata['visible']
+                    original_xmp_metadata = original_metadata['xmp']
+                    raw_dates = original_metadata.get('raw_dates', {})
+                else:
+                    original_visible_metadata = create_default_metadata()
             else:
-                suffix = "_custom"
+                # Cannot access original, use defaults
+                original_visible_metadata = create_default_metadata()
             
-            # Create output filename
-            output_name = f"{pdf_file.stem}{suffix}{pdf_file.suffix}"
-            output_file = self.processed_dir / output_name
+            # Generate passwords based on detected protection type
+            new_user_password = ""
+            new_owner_password = ""
             
-            # Copy to processed directory (replace with actual metadata processing)
-            shutil.copy2(pdf_file, output_file)
+            if security_info['needs_encryption']:
+                if security_info['has_user_password']:
+                    new_user_password = generate_random_password(12)
+                    new_owner_password = generate_random_password(16)
+                else:
+                    new_user_password = ""
+                    new_owner_password = generate_random_password(16)
             
-            # Here you would implement the actual PDF metadata processing logic
-            # For example:
-            # if "Remove metadata" in processing_type:
-            #     - Use pikepdf to remove all metadata
-            # elif "Keep original" in processing_type:
-            #     - Preserve existing metadata structure
-            # elif "Custom" in processing_type:
-            #     - Apply custom metadata rules
+            # Open edited PDF and apply metadata
+            with pikepdf.open(edited_pdf) as pdf:
+                # Clear existing metadata
+                try:
+                    pdf.docinfo.clear()
+                except AttributeError:
+                    for key in list(pdf.docinfo.keys()):
+                        del pdf.docinfo[key]
+                
+                # Apply visible metadata with exact preservation if enabled
+                for k, v in original_visible_metadata.items():
+                    if self.preserve_exact_timestamps and k in ['CreationDate', 'ModDate'] and k in raw_dates:
+                        # Use the raw date object directly to preserve exact format
+                        pdf.docinfo[f'/{k}'] = raw_dates[k]
+                    else:
+                        pdf.docinfo[f'/{k}'] = v
+                
+                # Apply XMP metadata if available
+                if original_xmp_metadata:
+                    # Update XMP dates to match visible metadata if preserving timestamps
+                    if self.preserve_exact_timestamps and raw_dates:
+                        creation_date = original_visible_metadata.get('CreationDate', '')
+                        mod_date = original_visible_metadata.get('ModDate', '')
+                        updated_xmp = update_xmp_dates(original_xmp_metadata, creation_date, mod_date)
+                        if updated_xmp:
+                            pdf.Root.Metadata = pdf.make_stream(updated_xmp.encode('utf-8'))
+                    else:
+                        pdf.Root.Metadata = pdf.make_stream(original_xmp_metadata.encode('utf-8'))
+                elif '/Metadata' in pdf.Root:
+                    del pdf.Root.Metadata
+                
+                # Save with encryption if original had any protection
+                if security_info['needs_encryption']:
+                    estimated_R = security_info['estimated_R']
+                    estimated_V = security_info['estimated_V']
+                    pdf_version = security_info['pdf_version']
+                    
+                    try:
+                        permissions = pikepdf.Permissions(
+                            print_lowres=True,
+                            print_highres=True,
+                            modify_annotation=False,
+                            modify_other=False,
+                            extract=True,
+                            modify_assembly=False,
+                            modify_form=False,
+                            accessibility=True
+                        )
+
+                        if estimated_R >= 6 or pdf_version >= '2.0':
+                            encrypt_params = pikepdf.Encryption(owner=new_owner_password, user=new_user_password, R=6, allow=permissions, aes=True, metadata=True)
+                        elif estimated_R >= 4:
+                            encrypt_params = pikepdf.Encryption(owner=new_owner_password, user=new_user_password, R=4, allow=permissions, aes=True, metadata=True)
+                        else:
+                            encrypt_params = pikepdf.Encryption(owner=new_owner_password, user=new_user_password, R=estimated_R, allow=permissions)
+                        
+                        pdf.save(output_pdf, encryption=encrypt_params, compress_streams=False, preserve_pdfa=True)
+                        
+                        # Save password information
+                        with open(password_file, 'w') as f:
+                            f.write(f"PDF Security Information\n")
+                            f.write(f"========================\n\n")
+                            f.write(f"File: {pair['filename']}\n\n")
+                            if new_user_password:
+                                f.write(f"User Password: {new_user_password}\n")
+                            else:
+                                f.write(f"User Password: (None - no password needed to open)\n")
+                            f.write(f"Owner Password: {new_owner_password}\n")
+                            f.write(f"Encryption Method: R={estimated_R}, V={estimated_V}\n")
+                            f.write(f"PDF Version: {pdf_version}\n")
+                            if working_password:
+                                f.write(f"Original Password (if found): {working_password}\n")
+                            if self.preserve_exact_timestamps and raw_dates:
+                                f.write(f"\nTimestamp preservation:\n")
+                                f.write(f"- Exact timestamps preserved: Yes\n")
+                                f.write(f"- Creation Date: {raw_dates.get('CreationDate', 'N/A')}\n")
+                                f.write(f"- Modification Date: {raw_dates.get('ModDate', 'N/A')}\n")
+                        
+                    except Exception as e:
+                        logger.error(f"Error applying encryption: {e}")
+                        # Save without encryption as fallback
+                        pdf.save(output_pdf, compress_streams=False, preserve_pdfa=True)
+                else:
+                    # No protection detected, save without encryption
+                    pdf.save(output_pdf, compress_streams=False, preserve_pdfa=True)
+            
+            # Set file system timestamps to match PDF metadata if enabled
+            if self.preserve_exact_timestamps and original_metadata and raw_dates:
+                creation_date = raw_dates.get('CreationDate')
+                mod_date = raw_dates.get('ModDate')
+                
+                if creation_date or mod_date:
+                    success = set_file_timestamps(output_pdf, creation_date, mod_date, original_file_timestamps)
+                    if not success:
+                        logger.warning("Could not update file system timestamps")
+            
+            return True
             
         except Exception as e:
-            raise Exception(f"Processing failed: {e}")
+            logger.error(f"Error processing PDF pair: {e}")
+            return False
     
     def _format_size(self, size_bytes):
         """Format file size in human-readable format"""
@@ -1515,7 +2136,7 @@ class PDFProcessor:
                 avg_time = self.stats['processing_time'] / self.stats['processed_files']
                 print(f"   • Average time per file: {avg_time:.2f} seconds")
             
-            print(f"\nProcessed files are available in: {self.processed_dir}")
+            print(f"\nProcessed files are available in: {self.final_dir}")
             
             if self.stats['total_files'] > 0:
                 success_rate = (self.stats['processed_files'] / self.stats['total_files']) * 100
@@ -1594,9 +2215,9 @@ class PDFMetadataTool:
             success = await self.processor.process_pdf_files()
             
             if success:
-                print("Session completed successfully!")
+                print("\nSession completed successfully!")
             else:
-                print("Session ended")
+                print("\nSession ended")
             
         except KeyboardInterrupt:
             print("\nApplication stopped by user")
@@ -1670,7 +2291,7 @@ class PDFMetadataTool:
             print("System requirements check complete")
         except Exception as e:
             print(f"System check error: {e}")
-
+    
     def _check_directory_structure(self):
         """Check and create directory structure for PDF processing"""
         print("\n📁 Directory Structure:")
@@ -1702,8 +2323,6 @@ class PDFMetadataTool:
         else:
             print(f"\n⚠️  Workflow: Basic processing only (install pikepdf for full features)")
             print(f"   📋 To install: pip install pikepdf")
-    
-
     
     def _format_size(self, size_bytes):
         """Format file size in human-readable format"""
