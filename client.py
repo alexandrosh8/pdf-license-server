@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-🔐 PDF Metadata Tool v2.2.0 Professional - ENHANCED EDITION
-============================================================
+🔐 PDF Metadata Tool v2.3.0 Professional - PRODUCTION READY EDITION
+====================================================================
 Enterprise-grade PDF metadata restoration with secure licensing and auto-updates
 Repository: https://github.com/alexandrosh8/pdf-license-server
 Contact: halexandros25@gmail.com
 
-🚀 PROFESSIONAL FEATURES v2.2.0:
+🚀 PROFESSIONAL FEATURES v2.3.0:
+- FIXED: Build mode detection - no more BUILD_MODE for end users
 - Modern Material Design UI with progress indicators
 - Advanced PDF metadata restoration algorithms
 - Smart auto-update system with GitHub integration
@@ -59,12 +60,41 @@ if platform.system() == "Windows":
     except Exception:
         pass  # Fallback gracefully
 
-# ===== BUILD MODE DETECTION - CRITICAL FOR PYINSTALLER =====
-BUILD_MODE = (
-    "--build" in sys.argv or 
-    "pyinstaller" in " ".join(sys.argv).lower() or
-    getattr(sys, 'frozen', False)  # Detect if running as PyInstaller executable
-)
+# ===== FIXED BUILD MODE DETECTION - CRITICAL FOR PRODUCTION =====
+def is_build_mode():
+    """
+    FIXED: Detect if we're in actual build mode vs production executable
+    Returns True only during PyInstaller build process, not for end users
+    """
+    
+    # Check if we're running as a PyInstaller executable
+    if hasattr(sys, '_MEIPASS'):
+        # We're running as a PyInstaller executable
+        
+        # Check for build environment indicators
+        build_indicators = [
+            'GITHUB_ACTIONS' in os.environ,  # GitHub Actions build
+            'CI' in os.environ,              # Continuous Integration
+            'BUILD_MODE' in os.environ,      # Explicit build mode flag
+            '--build-mode' in sys.argv,      # Command line flag
+            os.path.exists(os.path.join(sys._MEIPASS, 'BUILD_FLAG')),  # Build flag file
+        ]
+        
+        # Only enter build mode if we detect actual build environment
+        return any(build_indicators)
+    
+    # Not a PyInstaller executable - check for development mode
+    return (
+        'GITHUB_ACTIONS' in os.environ or
+        'CI' in os.environ or
+        'BUILD_MODE' in os.environ or
+        '--build-mode' in sys.argv or
+        "--build" in sys.argv or 
+        "pyinstaller" in " ".join(sys.argv).lower()
+    )
+
+# Set BUILD_MODE using the fixed detection
+BUILD_MODE = is_build_mode()
 
 # ===== NETWORK AND FILE IMPORTS =====
 try:
@@ -124,11 +154,14 @@ if platform.system() == "Windows":
 else:
     WIN32_AVAILABLE = False
 
-# ===== PROFESSIONAL CONFIGURATION =====
-VERSION = "v2.2.0"
-__version__ = "2.2.0"  # For compatibility with GitHub workflow
+# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.0 =====
+VERSION = "v2.3.0"
+__version__ = "2.3.0"  # For compatibility with GitHub workflow
 BUILD_DATE = "2024-01-01"  # Auto-updated by GitHub workflow
 BUILD_TYPE = "release"     # Auto-updated by GitHub workflow
+
+APP_NAME = "PDF Metadata Tool"
+APP_TITLE = f"{APP_NAME} {VERSION} Professional"
 
 # ===== SERVER CONFIGURATION - UPDATED FOR ENHANCED INTEGRATION =====
 GITHUB_REPO = "alexandrosh8/pdf-license-server"
@@ -208,24 +241,27 @@ class ProfessionalUI:
             width = 100
             print("╭" + "─" * (width - 2) + "╮")
             print("│" + " " * (width - 2) + "│")
-            print("│" + "🔐 PDF Metadata Tool Professional".center(width - 2) + "│")
-            print("│" + f"{VERSION} Enterprise Edition".center(width - 2) + "│")
+            print("│" + f"🔐 {APP_TITLE}".center(width - 2) + "│")
             print("│" + "Advanced PDF Metadata Restoration System".center(width - 2) + "│")
             print("│" + " " * (width - 2) + "│")
             print("│" + f"Repository: github.com/{GITHUB_REPO}".center(width - 2) + "│")
             print("│" + f"Support: {CONTACT_EMAIL}".center(width - 2) + "│")
             if BUILD_MODE:
                 print("│" + "🔧 BUILD MODE - License validation bypassed".center(width - 2) + "│")
+            else:
+                print("│" + "🚀 Production Mode - License validation active".center(width - 2) + "│")
             print("│" + " " * (width - 2) + "│")
             print("╰" + "─" * (width - 2) + "╯")
             print()
         except Exception as e:
             # Fallback for any Unicode display issues
             print("=" * 80)
-            print(f"PDF Metadata Tool Professional {VERSION}")
+            print(f"{APP_TITLE}")
             print(f"Support: {CONTACT_EMAIL}")
             if BUILD_MODE:
                 print("BUILD MODE - License validation bypassed")
+            else:
+                print("Production Mode - License validation active")
             print("=" * 80)
 
     @staticmethod
@@ -592,7 +628,7 @@ class LicenseValidator:
     
     async def enforce_license_or_exit(self):
         """CRITICAL: Enforce license validation - app exits if invalid - PyInstaller compatible"""
-        # 🔧 BUILD MODE BYPASS - Only during build/development
+        # 🔧 BUILD MODE BYPASS - Only during actual build/CI
         if BUILD_MODE:
             logger.info("🔧 BUILD MODE: Skipping license validation for build process")
             logger.info("⚠️ Production executable will require valid license")
@@ -1349,7 +1385,7 @@ async def main():
         if not BUILD_MODE:
             try:
                 print("\n" + "─" * 60)
-                print("Thank you for using PDF Metadata Tool Professional!")
+                print(f"Thank you for using {APP_TITLE}!")
                 print(f"Support: {CONTACT_EMAIL}")
                 print("─" * 60)
                 input("Press Enter to exit...")
