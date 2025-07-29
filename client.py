@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-🔐 PDF Metadata Tool v2.3.4 Professional - FIXED EDITION
+🔐 PDF Metadata Tool v2.4.0 Professional - CLEAN EDITION
 ============================================================
 Enterprise-grade PDF metadata restoration with secure licensing and auto-updates
 Contact: halexandros25@gmail.com
 
-🚀 PROFESSIONAL FEATURES v2.3.4:
-- FIXED: Build mode detection - no more BUILD_MODE for end users
-- FIXED: Unicode logging errors on Windows systems
+🚀 PROFESSIONAL FEATURES v2.4.0:
+- CLEANED: Removed progress bars and visual clutter for professional appearance
+- CLEANED: Removed anonymize option - focused on core metadata restoration
+- IMPROVED: Clean, professional output with clear success/failure indicators
+- FIXED: Custom settings now fully functional with interactive configuration
 - FIXED: Integrated 3-folder workflow (original → edited → final)
 - FIXED: Actual PDF metadata restoration with pikepdf
-- Modern Material Design UI with progress indicators
+- Modern Material Design UI with clean status indicators
 - Advanced PDF metadata restoration algorithms
 - Smart auto-update system with GitHub integration
 - Enterprise-grade license validation with hardware binding
@@ -164,9 +166,9 @@ else:
     WIN32_AVAILABLE = False
     WIN32_TIMESTAMP_AVAILABLE = False
 
-# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.4 =====
-VERSION = "v2.3.4"
-__version__ = "2.3.4"  # For compatibility with GitHub workflow
+# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.4.0 =====
+VERSION = "v2.4.0"
+__version__ = "2.4.0"  # For compatibility with GitHub workflow
 BUILD_DATE = "2024-01-01"  # Auto-updated by GitHub workflow
 BUILD_TYPE = "release"     # Auto-updated by GitHub workflow
 
@@ -369,28 +371,6 @@ class ProfessionalUI:
         except Exception:
             print(f"\n{title}")
             print("-" * len(title))
-
-    @staticmethod
-    def print_progress_bar(current, total, prefix="Progress", width=50):
-        """Display a professional progress bar"""
-        try:
-            if total == 0:
-                return
-            
-            percent = (current / total) * 100
-            filled_width = int(width * current // total)
-            bar = "█" * filled_width + "░" * (width - filled_width)
-            
-            print(f"\r{prefix}: |{bar}| {current}/{total} ({percent:.1f}%)", end="", flush=True)
-            
-            if current == total:
-                print()  # New line when complete
-        except Exception:
-            # Fallback progress display
-            percent = (current / total) * 100 if total > 0 else 0
-            print(f"\r{prefix}: {current}/{total} ({percent:.1f}%)", end="", flush=True)
-            if current == total:
-                print()
 
     @staticmethod
     def print_status_box(status, message, color_code="32"):
@@ -1035,7 +1015,7 @@ class AutoUpdater:
                         
                         download_path = download_dir / filename
                         
-                        # Download with progress bar
+                        # Download with simple progress
                         total_size = int(response.headers.get('content-length', 0))
                         downloaded = 0
                         
@@ -1046,11 +1026,10 @@ class AutoUpdater:
                                 await file.write(chunk)
                                 downloaded += len(chunk)
                                 if total_size > 0:
-                                    ProfessionalUI.print_progress_bar(
-                                        downloaded, total_size, "Download"
-                                    )
+                                    percent = (downloaded / total_size) * 100
+                                    print(f"\rDownload progress: {percent:.1f}%", end="", flush=True)
                         
-                        print("Download completed successfully")
+                        print("\nDownload completed successfully")
                         
                         # Install update
                         await self._install_update(download_path, version)
@@ -1752,14 +1731,79 @@ class PDFProcessor:
             return []
     
     def get_processing_options_menu(self):
-        """Get processing options for the menu"""
+        """Get processing options for the menu (cleaned - no anonymize option)"""
         return [
             "Preserve exact timestamps (file system + metadata)",
             "Standard processing (metadata only)",
-            "Remove all metadata (anonymize)",
             "Custom settings"
         ]
     
+    def get_custom_settings_menu(self):
+        """Get custom processing settings from user"""
+        try:
+            ProfessionalUI.print_section("Custom Processing Settings", "🛠️")
+            
+            print("Configure your custom processing options:")
+            print()
+            
+            # Timestamp preservation
+            timestamp_choice = ProfessionalUI.get_user_choice(
+                "Preserve exact timestamps? (y/N)", 
+                ['y', 'yes', 'n', 'no', '']
+            )
+            if timestamp_choice == 'quit':
+                return None
+            self.preserve_exact_timestamps = timestamp_choice.lower() in ['y', 'yes']
+            
+            # Time matching
+            if self.preserve_exact_timestamps:
+                time_match_choice = ProfessionalUI.get_user_choice(
+                    "Use exact time matching? (Y/n)", 
+                    ['y', 'yes', 'n', 'no', '']
+                )
+                if time_match_choice == 'quit':
+                    return None
+                self.use_exact_time_match = time_match_choice.lower() not in ['n', 'no']
+            
+            # Read-only setting
+            readonly_choice = ProfessionalUI.get_user_choice(
+                "Make final files read-only? (y/N)", 
+                ['y', 'yes', 'n', 'no', '']
+            )
+            if readonly_choice == 'quit':
+                return None
+            self.permanent_read_only = readonly_choice.lower() in ['y', 'yes']
+            
+            # Timestamp source priority
+            print("\nTimestamp source priority:")
+            print("   1. PDF metadata first (recommended)")
+            print("   2. File system timestamps first")
+            priority_choice = ProfessionalUI.get_user_choice(
+                "Choose timestamp priority (1/2)", 
+                ['1', '2']
+            )
+            if priority_choice == 'quit':
+                return None
+            self.timestamp_source_priority = int(priority_choice)
+            
+            # Summary
+            print("\n📋 Custom Settings Summary:")
+            print(f"   • Preserve timestamps: {'Yes' if self.preserve_exact_timestamps else 'No'}")
+            if self.preserve_exact_timestamps:
+                print(f"   • Exact time matching: {'Yes' if self.use_exact_time_match else 'No'}")
+            print(f"   • Read-only final files: {'Yes' if self.permanent_read_only else 'No'}")
+            print(f"   • Timestamp priority: {'PDF metadata' if self.timestamp_source_priority == 1 else 'File system'}")
+            
+            confirm = ProfessionalUI.get_user_choice(
+                "Apply these settings? (Y/n)", 
+                ['y', 'yes', 'n', 'no', '']
+            )
+            return confirm.lower() not in ['n', 'no']
+            
+        except Exception as e:
+            print(f"Error in custom settings: {e}")
+            return False
+
     async def process_pdf_files(self):
         """Process PDF files with professional user interaction"""
         try:
@@ -1836,18 +1880,20 @@ class PDFProcessor:
                 if proc_choice == 'quit':
                     return False
                 
-                # Configure processing based on choice
+                # Configure processing based on choice (cleaned - no anonymize option)
                 if proc_choice == '1':  # Preserve exact timestamps
                     self.preserve_exact_timestamps = True
                     self.use_exact_time_match = True
                 elif proc_choice == '2':  # Standard processing
                     self.preserve_exact_timestamps = False
-                elif proc_choice == '3':  # Remove metadata
-                    self.preserve_exact_timestamps = False
-                    # This would be a different processing path
-                elif proc_choice == '4':  # Custom settings
-                    # Would show custom settings menu
-                    self.preserve_exact_timestamps = True
+                    self.use_exact_time_match = False
+                elif proc_choice == '3':  # Custom settings
+                    settings_result = self.get_custom_settings_menu()
+                    if settings_result is None:
+                        continue  # User quit
+                    elif not settings_result:
+                        print("Custom settings cancelled, using standard processing")
+                        self.preserve_exact_timestamps = False
                 
                 # Process selected pairs
                 success = await self._process_selected_pairs(selected_pairs, proc_choice)
@@ -1890,7 +1936,7 @@ class PDFProcessor:
             return False
     
     async def _process_selected_pairs(self, selected_pairs, processing_type):
-        """Process the selected file pairs"""
+        """Process the selected file pairs with clean, professional output"""
         try:
             self.stats = {
                 'total_files': len(selected_pairs),
@@ -1909,33 +1955,23 @@ class PDFProcessor:
             
             start_time = time.time()
             
-            # Process files with progress tracking
+            # Process files with clean output (NO PROGRESS BAR)
             for i, pair in enumerate(selected_pairs, 1):
                 try:
-                    print(f"\nProcessing: {pair['filename']}")
-                    
-                    # Update progress
-                    ProfessionalUI.print_progress_bar(
-                        i - 1, len(selected_pairs), f"Processing"
-                    )
+                    print(f"Processing: {pair['filename']}")
                     
                     # Process the PDF pair
                     success = await self._process_single_pair(pair)
                     
                     if success:
                         self.stats['processed_files'] += 1
-                        print(f"✅ Completed: {pair['filename']}")
+                        print(f"✅ Success: {pair['filename']}")
                     else:
                         self.stats['failed_files'] += 1
                         print(f"❌ Failed: {pair['filename']}")
                     
-                    # Update final progress
-                    ProfessionalUI.print_progress_bar(
-                        i, len(selected_pairs), "Processing"
-                    )
-                    
                 except Exception as e:
-                    print(f"❌ Failed to process {pair['filename']}: {e}")
+                    print(f"❌ Error processing {pair['filename']}: {e}")
                     self.stats['failed_files'] += 1
             
             self.stats['processing_time'] = time.time() - start_time
@@ -1950,7 +1986,7 @@ class PDFProcessor:
             return False
     
     async def _process_single_pair(self, pair):
-        """Process a single PDF file pair"""
+        """Process a single PDF file pair with clean output"""
         try:
             original_pdf = pair['original']
             edited_pdf = pair['edited']
@@ -2123,30 +2159,42 @@ class PDFProcessor:
     def _display_processing_stats(self):
         """Display professional processing statistics"""
         try:
+            print()  # Add spacing
             ProfessionalUI.print_section("Processing Complete", "✅")
             
-            print(f"Processing Statistics:")
-            print(f"   • Total files: {self.stats['total_files']}")
-            print(f"   • Successfully processed: {self.stats['processed_files']}")
-            print(f"   • Failed: {self.stats['failed_files']}")
+            # Success summary
+            success_rate = (self.stats['processed_files'] / self.stats['total_files']) * 100 if self.stats['total_files'] > 0 else 0
+            
+            if success_rate == 100:
+                status_color = "32"  # Green
+                status_msg = "All files processed successfully"
+            elif success_rate > 0:
+                status_color = "33"  # Yellow  
+                status_msg = f"Partial success - {self.stats['failed_files']} files failed"
+            else:
+                status_color = "31"  # Red
+                status_msg = "Processing failed for all files"
+            
+            ProfessionalUI.print_status_box("PROCESSING COMPLETE", status_msg, status_color)
+            
+            # Detailed statistics
+            print(f"\nProcessing Summary:")
+            print(f"   • Files processed: {self.stats['processed_files']}/{self.stats['total_files']}")
+            if self.stats['failed_files'] > 0:
+                print(f"   • Failed files: {self.stats['failed_files']}")
             print(f"   • Total size: {self._format_size(self.stats['total_size'])}")
-            print(f"   • Processing time: {self.stats['processing_time']:.2f} seconds")
+            print(f"   • Processing time: {self.stats['processing_time']:.1f} seconds")
             
             if self.stats['processed_files'] > 0:
                 avg_time = self.stats['processing_time'] / self.stats['processed_files']
-                print(f"   • Average time per file: {avg_time:.2f} seconds")
+                print(f"   • Average per file: {avg_time:.1f} seconds")
             
-            print(f"\nProcessed files are available in: {self.final_dir}")
+            print(f"\n📁 Output location: {self.final_dir}")
             
-            if self.stats['total_files'] > 0:
-                success_rate = (self.stats['processed_files'] / self.stats['total_files']) * 100
-                color = "32" if success_rate == 100 else "33" if success_rate > 80 else "31"
-                
-                ProfessionalUI.print_status_box(
-                    "PROCESSING COMPLETE", 
-                    f"Success rate: {success_rate:.1f}% ({self.stats['processed_files']}/{self.stats['total_files']})",
-                    color
-                )
+            # Additional info based on processing type
+            if self.preserve_exact_timestamps:
+                print("🕒 File timestamps have been preserved to match PDF metadata")
+            
         except Exception as e:
             print(f"Error displaying stats: {e}")
 
@@ -2180,10 +2228,8 @@ class PDFMetadataTool:
             # Display professional header
             ProfessionalUI.print_header()
             
-            # Display version information
+            # Display version information (cleaned - removed executable message)
             print(f"Version: {VERSION}")
-            if hasattr(sys, 'frozen') and sys.frozen:
-                print("Running as compiled executable")
             
             # CRITICAL: License validation first
             license_result = await self.validator.enforce_license_or_exit()
