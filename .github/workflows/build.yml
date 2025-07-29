@@ -157,12 +157,19 @@ jobs:
         $exePath = "dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
         
         if (Test-Path $exePath) {
-          # Test that the file is a valid PE executable
-          $signature = Get-Content $exePath -Encoding Byte -TotalCount 2
-          if ($signature[0] -eq 77 -and $signature[1] -eq 90) {
-            echo "✅ Valid executable format confirmed"
-          } else {
-            echo "❌ Invalid executable format"
+          # Test that the file is a valid PE executable using modern PowerShell syntax
+          # Use -AsByteStream instead of -Encoding Byte (which is deprecated in PowerShell Core)
+          try {
+            $signature = Get-Content $exePath -AsByteStream -TotalCount 2
+            if ($signature[0] -eq 77 -and $signature[1] -eq 90) {
+              echo "✅ Valid executable format confirmed (PE signature: MZ)"
+            } else {
+              echo "❌ Invalid executable format - expected PE signature"
+              echo "First two bytes: $($signature[0]), $($signature[1])"
+              exit 1
+            }
+          } catch {
+            echo "❌ Error reading executable header: $($_.Exception.Message)"
             exit 1
           }
           
@@ -171,6 +178,13 @@ jobs:
           echo "📋 File details:"
           echo "   Size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
           echo "   Created: $($fileInfo.CreationTime)"
+          echo "   Extension: $($fileInfo.Extension)"
+          
+          # Check if it's actually an executable file
+          if ($fileInfo.Extension -ne ".exe") {
+            echo "❌ File does not have .exe extension"
+            exit 1
+          }
         } else {
           echo "❌ Executable not found for testing!"
           exit 1
