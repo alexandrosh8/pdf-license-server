@@ -54,6 +54,16 @@ import shutil
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_urlsafe(32))
 
+# Enhanced logging setup
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Admin credentials from environment variables (required)
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
@@ -88,16 +98,6 @@ except ImportError:
 
 # Always import sqlite3 as fallback
 import sqlite3
-
-# Enhanced logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
 
 # Global flag to track database initialization status
 DATABASE_INITIALIZED = False
@@ -277,7 +277,7 @@ app.jinja_env.globals.update({
 })
 
 # =============================================================================
-# DATABASE FUNCTIONS (Same as before but enhanced)
+# DATABASE FUNCTIONS (Enhanced)
 # =============================================================================
 
 def get_db_connection():
@@ -418,12 +418,28 @@ def safe_init_database():
                             file_size INTEGER,
                             github_url TEXT,
                             build_status VARCHAR(50) DEFAULT 'pending',
-                            version_tag VARCHAR(50)
+                            version_tag VARCHAR(50),
+                            build_number INTEGER,
+                            commit_sha VARCHAR(100),
+                            release_url TEXT
                         )
                     ''')
+                    
+                    # Create index for version_tag for better performance
+                    cur.execute('CREATE INDEX IF NOT EXISTS idx_client_uploads_version ON client_uploads(version_tag)')
+                    
                     logger.info("✅ Client_uploads table created successfully")
                 else:
                     logger.info("✅ Client_uploads table already exists, preserving data")
+                    
+                    # Add new columns if they don't exist (for existing databases)
+                    try:
+                        cur.execute('ALTER TABLE client_uploads ADD COLUMN IF NOT EXISTS build_number INTEGER')
+                        cur.execute('ALTER TABLE client_uploads ADD COLUMN IF NOT EXISTS commit_sha VARCHAR(100)')
+                        cur.execute('ALTER TABLE client_uploads ADD COLUMN IF NOT EXISTS release_url TEXT')
+                        logger.info("✅ Added new columns to existing client_uploads table")
+                    except Exception as e:
+                        logger.info(f"ℹ️ Columns may already exist: {e}")
                 
                 # Create indexes for performance (IF NOT EXISTS)
                 logger.info("🚀 Creating performance indexes...")
@@ -539,12 +555,24 @@ def safe_init_database():
                             file_size INTEGER,
                             github_url TEXT,
                             build_status TEXT DEFAULT 'pending',
-                            version_tag TEXT
+                            version_tag TEXT,
+                            build_number INTEGER,
+                            commit_sha TEXT,
+                            release_url TEXT
                         )
                     ''')
                     logger.info("✅ Client_uploads table created")
                 else:
                     logger.info("✅ Client_uploads table already exists, preserving data")
+                    
+                    # Add new columns if they don't exist (for existing databases)
+                    try:
+                        cur.execute('ALTER TABLE client_uploads ADD COLUMN build_number INTEGER')
+                        cur.execute('ALTER TABLE client_uploads ADD COLUMN commit_sha TEXT') 
+                        cur.execute('ALTER TABLE client_uploads ADD COLUMN release_url TEXT')
+                        logger.info("✅ Added new columns to existing client_uploads table")
+                    except Exception as e:
+                        logger.info(f"ℹ️ Columns may already exist: {e}")
                 
                 # Create indexes
                 cur.execute('CREATE INDEX IF NOT EXISTS idx_licenses_key ON licenses(license_key)')
@@ -617,7 +645,7 @@ def ensure_database_ready():
         return True
 
 # =============================================================================
-# FLASK 3.0+ COMPATIBLE STARTUP SYSTEM (Same as before)
+# FLASK 3.0+ COMPATIBLE STARTUP SYSTEM
 # =============================================================================
 
 @app.before_request
@@ -647,10 +675,9 @@ def initialize_database_on_startup():
     
     try:
         logger.info("📡 Safe initialization with app context...")
-        with app.app_context():
-            if safe_init_database():
-                logger.info("✅ SUCCESS - Database safely initialized with data preservation")
-                return True
+        if safe_init_database():
+            logger.info("✅ SUCCESS - Database safely initialized with data preservation")
+            return True
     except Exception as e:
         logger.warning(f"⚠️ Startup initialization warning: {e}")
     
@@ -659,7 +686,7 @@ def initialize_database_on_startup():
     return False
 
 # =============================================================================
-# UTILITY FUNCTIONS (Enhanced)
+# UTILITY FUNCTIONS
 # =============================================================================
 
 def generate_license_key():
@@ -725,12 +752,12 @@ def require_auth(f):
     return decorated_function
 
 # =============================================================================
-# NEW: GITHUB INTEGRATION ENDPOINTS
+# GITHUB INTEGRATION ENDPOINTS
 # =============================================================================
 
 @app.route('/api/release-notification', methods=['POST'])
 def release_notification():
-    """Webhook endpoint for GitHub release notifications"""
+    """Webhook endpoint for GitHub release notifications - Compatible with your workflow"""
     try:
         if not ensure_database_ready():
             return jsonify({"error": "Database not ready"}), 503
@@ -741,40 +768,93 @@ def release_notification():
         release_date = data.get('release_date', datetime.now().isoformat())
         build_number = data.get('build_number', 0)
         commit_sha = data.get('commit_sha', '')
+        filename = data.get('filename', f'PDF-Metadata-Tool-{version}.exe')
+        release_url = data.get('release_url', '')
+        
+        # Extract just the filename from download_url if not provided
+        if not filename and download_url:
+            filename = download_url.split('/')[-1]
+        
+        logger.info(f"🔔 GitHub release notification received: {version}")
+        logger.info(f"📥 Download URL: {download_url}")
+        logger.info(f"🏷️ Build: #{build_number} | Commit: {commit_sha[:8]}")
         
         # Update client_uploads table with new release info
         conn = get_db_connection()
         cur = conn.cursor()
         
-        if is_postgresql():
-            cur.execute('''
-                INSERT INTO client_uploads (filename, version_tag, github_url, build_status, uploaded_by)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (version_tag) DO UPDATE SET
-                    build_status = 'completed',
-                    github_url = EXCLUDED.github_url
-            ''', (f'client-{version}.exe', version, download_url, 'completed', 'github-actions'))
-        else:
-            cur.execute('''
-                INSERT OR REPLACE INTO client_uploads (filename, version_tag, github_url, build_status, uploaded_by)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (f'client-{version}.exe', version, download_url, 'completed', 'github-actions'))
+        try:
+            if is_postgresql():
+                # First try to update existing record, then insert if not exists
+                cur.execute('''
+                    UPDATE client_uploads 
+                    SET build_status = 'completed', 
+                        github_url = %s,
+                        upload_date = NOW(),
+                        build_number = %s,
+                        commit_sha = %s,
+                        release_url = %s
+                    WHERE version_tag = %s
+                ''', (download_url, build_number, commit_sha, release_url, version))
+                
+                if cur.rowcount == 0:
+                    # No existing record, insert new one
+                    cur.execute('''
+                        INSERT INTO client_uploads 
+                        (filename, version_tag, github_url, build_status, uploaded_by, 
+                         build_number, commit_sha, release_url)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', (filename, version, download_url, 'completed', 'github-actions',
+                          build_number, commit_sha, release_url))
+                    
+            else:
+                # SQLite - use INSERT OR REPLACE
+                cur.execute('''
+                    INSERT OR REPLACE INTO client_uploads 
+                    (filename, version_tag, github_url, build_status, uploaded_by, upload_date,
+                     build_number, commit_sha, release_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (filename, version, download_url, 'completed', 'github-actions', 
+                      datetime.now().isoformat(), build_number, commit_sha, release_url))
+            
+            conn.commit()
+            logger.info(f"✅ Database updated for version {version}")
+            
+        except Exception as db_error:
+            logger.error(f"Database update error: {db_error}")
+            # Continue - don't fail the notification for DB issues
+            
+        finally:
+            cur.close()
+            conn.close()
         
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        logger.info(f"✅ Release notification received: {version}")
-        
-        return jsonify({
+        # Return success response that matches your workflow expectations
+        response_data = {
             "success": True,
-            "message": f"Release {version} notification processed",
-            "version": version
-        })
+            "message": f"Release {version} notification processed successfully",
+            "version": version,
+            "build_number": build_number,
+            "download_url": download_url,
+            "filename": filename,
+            "processed_at": datetime.now().isoformat()
+        }
+        
+        logger.info(f"🎉 Release notification processed successfully: {version}")
+        return jsonify(response_data)
         
     except Exception as e:
-        logger.error(f"Release notification failed: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"❌ Release notification failed: {e}")
+        logger.exception("Full traceback:")
+        
+        # Return error but don't fail completely - GitHub Actions should continue
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "message": "Notification received but processing failed"
+        }), 200  # Return 200 so GitHub doesn't retry
+
+@app.route('/api/client-update-check', methods=['GET'])
+def client_update_check():
     """API endpoint for clients to check for updates"""
     try:
         if not ensure_database_ready():
@@ -808,10 +888,10 @@ def release_notification():
         if latest_upload:
             return jsonify({
                 "update_available": True,
-                "latest_version": latest_upload['version_tag'] or "latest",
-                "download_url": latest_upload['github_url'],
-                "release_date": latest_upload['upload_date'],
-                "filename": latest_upload['filename']
+                "latest_version": latest_upload[1] or "latest",  # version_tag
+                "download_url": latest_upload[2],  # github_url
+                "release_date": latest_upload[3],  # upload_date
+                "filename": latest_upload[0]  # filename
             })
         else:
             return jsonify({"update_available": False})
@@ -892,7 +972,7 @@ def upload_client_file():
     return redirect('/admin')
 
 # =============================================================================
-# API ENDPOINTS (Same validation logic)
+# API ENDPOINTS
 # =============================================================================
 
 @app.route('/api/validate', methods=['POST'])
@@ -1043,7 +1123,6 @@ def validate_license():
 def health_check():
     """Enhanced health check endpoint with comprehensive diagnostics"""
     try:
-        # ... same health check logic as before but with GitHub status
         github_configured = bool(GITHUB_TOKEN and GITHUB_REPO)
         
         db_status = get_database_status()
@@ -1173,7 +1252,7 @@ def get_database_status():
     return status
 
 # =============================================================================
-# ENHANCED WEB INTERFACE
+# WEB INTERFACE
 # =============================================================================
 
 @app.route('/')
@@ -1186,10 +1265,6 @@ def index():
                                 initialization_attempts=INITIALIZATION_ATTEMPTS,
                                 github_configured=github_configured,
                                 github_repo=GITHUB_REPO if github_configured else "Not configured")
-
-# =============================================================================
-# ENHANCED WEB INTERFACE - ADMIN ROUTES
-# =============================================================================
 
 @app.route('/admin')
 @require_auth
@@ -1239,9 +1314,10 @@ def admin():
             ''')
             recent_validations = cur.fetchall()
             
-            # Get client uploads history
+            # Get client uploads history with new fields
             cur.execute('''
-                SELECT filename, upload_date, uploaded_by, version_tag, build_status, github_url
+                SELECT filename, upload_date, uploaded_by, version_tag, build_status, github_url,
+                       build_number, commit_sha, release_url
                 FROM client_uploads 
                 ORDER BY upload_date DESC 
                 LIMIT 10
@@ -1274,7 +1350,8 @@ def admin():
             ''').fetchall()
             
             client_uploads = cur.execute('''
-                SELECT filename, upload_date, uploaded_by, version_tag, build_status, github_url
+                SELECT filename, upload_date, uploaded_by, version_tag, build_status, github_url,
+                       build_number, commit_sha, release_url
                 FROM client_uploads 
                 ORDER BY upload_date DESC 
                 LIMIT 10
@@ -1451,7 +1528,7 @@ def extend_license():
             ).fetchone()
             
             if result:
-                current_expiry = datetime.fromisoformat(result['expiry_date'])
+                current_expiry = datetime.fromisoformat(result[0])
                 new_expiry = current_expiry + timedelta(days=extend_days)
                 cur.execute(
                     'UPDATE licenses SET expiry_date = ? WHERE license_key = ?',
@@ -2271,19 +2348,19 @@ ENHANCED_ADMIN_HTML = '''
         <!-- Statistics -->
         <div class="stats">
             <div class="stat-box">
-                <div class="stat-number">{{ stats.total_licenses or 0 }}</div>
+                <div class="stat-number">{{ stats.total_licenses if stats else 0 }}</div>
                 <div class="stat-label">Total Licenses</div>
             </div>
             <div class="stat-box">
-                <div class="stat-number">{{ stats.active_licenses or 0 }}</div>
+                <div class="stat-number">{{ stats.active_licenses if stats else 0 }}</div>
                 <div class="stat-label">Active Licenses</div>
             </div>
             <div class="stat-box">
-                <div class="stat-number">{{ stats.valid_licenses or 0 }}</div>
+                <div class="stat-number">{{ stats.valid_licenses if stats else 0 }}</div>
                 <div class="stat-label">Valid Licenses</div>
             </div>
             <div class="stat-box">
-                <div class="stat-number">{{ (recent_validations | length) or 0 }}</div>
+                <div class="stat-number">{{ (recent_validations | length) if recent_validations else 0 }}</div>
                 <div class="stat-label">Recent Validations</div>
             </div>
         </div>
@@ -2333,7 +2410,7 @@ ENHANCED_ADMIN_HTML = '''
         <div id="licenses" class="tab-content active">
             <div class="card">
                 <div class="card-header">
-                    <span><i class="bi bi-key"></i> License Management ({{ (licenses | length) or 0 }} licenses)</span>
+                    <span><i class="bi bi-key"></i> License Management ({{ (licenses | length) if licenses else 0 }} licenses)</span>
                 </div>
                 <div class="card-body">
                     {% if licenses %}
@@ -2356,10 +2433,10 @@ ENHANCED_ADMIN_HTML = '''
                                     <td>
                                         <div class="license-info">
                                             <div class="license-key-row">
-                                                <span class="license-key" onclick="copyToClipboard('{{ license.license_key }}', this)">
-                                                    {{ license.license_key }}
+                                                <span class="license-key" onclick="copyToClipboard('{{ license.license_key if license.license_key else license[0] }}', this)">
+                                                    {{ license.license_key if license.license_key else license[0] }}
                                                 </span>
-                                                <button class="copy-btn" onclick="copyToClipboard('{{ license.license_key }}', this)">
+                                                <button class="copy-btn" onclick="copyToClipboard('{{ license.license_key if license.license_key else license[0] }}', this)">
                                                     <i class="bi bi-copy"></i>
                                                 </button>
                                             </div>
@@ -2367,33 +2444,33 @@ ENHANCED_ADMIN_HTML = '''
                                     </td>
                                     <td>
                                         <div class="customer-info">
-                                            {% if license.customer_name %}
-                                                <div class="customer-name">{{ license.customer_name }}</div>
+                                            {% if license.customer_name or (license|length > 2 and license[2]) %}
+                                                <div class="customer-name">{{ license.customer_name if license.customer_name else license[2] }}</div>
                                             {% endif %}
-                                            <div class="customer-email">{{ license.customer_email }}</div>
+                                            <div class="customer-email">{{ license.customer_email if license.customer_email else license[1] }}</div>
                                         </div>
                                     </td>
                                     <td>
                                         <div class="date-info">
-                                            <div><strong>Created:</strong> {{ license.created_date | formatdatetime }}</div>
-                                            <div><strong>Expires:</strong> {{ license.expiry_date | formatdatetime }}</div>
-                                            {% if license.last_used %}
-                                                <div><strong>Last Used:</strong> {{ license.last_used | formatdatetime }}</div>
+                                            <div><strong>Created:</strong> {{ license.created_date | formatdatetime if license.created_date else (license[3] | formatdatetime if license|length > 3 else 'N/A') }}</div>
+                                            <div><strong>Expires:</strong> {{ license.expiry_date | formatdatetime if license.expiry_date else (license[4] | formatdatetime if license|length > 4 else 'N/A') }}</div>
+                                            {% if license.last_used or (license|length > 6 and license[6]) %}
+                                                <div><strong>Last Used:</strong> {{ license.last_used | formatdatetime if license.last_used else (license[6] | formatdatetime) }}</div>
                                             {% endif %}
                                         </div>
                                     </td>
                                     <td>
-                                        {% if license.hardware_id %}
-                                            <div class="hardware-id">{{ license.hardware_id }}</div>
+                                        {% if license.hardware_id or (license|length > 8 and license[8]) %}
+                                            <div class="hardware-id">{{ license.hardware_id if license.hardware_id else license[8] }}</div>
                                         {% else %}
                                             <span style="color: var(--text-secondary); font-style: italic;">Not bound</span>
                                         {% endif %}
                                     </td>
                                     <td>
-                                        <div class="usage-count">{{ license.validation_count or 0 }}</div>
+                                        <div class="usage-count">{{ license.validation_count if license.validation_count else (license[7] if license|length > 7 else 0) }}</div>
                                     </td>
                                     <td>
-                                        {% if license.active %}
+                                        {% if (license.active if license.active is not none else (license[5] if license|length > 5 else 1)) %}
                                             <span class="status-badge active">Active</span>
                                         {% else %}
                                             <span class="status-badge inactive">Inactive</span>
@@ -2402,22 +2479,22 @@ ENHANCED_ADMIN_HTML = '''
                                     <td>
                                         <div class="action-buttons">
                                             <form method="POST" action="/admin/toggle_license" style="display: inline;">
-                                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                                <input type="hidden" name="license_key" value="{{ license.license_key if license.license_key else license[0] }}">
                                                 <button type="submit" class="btn btn-warning">
                                                     <i class="bi bi-toggle-off"></i>
                                                 </button>
                                             </form>
                                             <form method="POST" action="/admin/extend_license" style="display: inline;">
-                                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                                <input type="hidden" name="license_key" value="{{ license.license_key if license.license_key else license[0] }}">
                                                 <input type="hidden" name="extend_days" value="30">
                                                 <button type="submit" class="btn btn-success" title="Extend 30 days">
                                                     <i class="bi bi-calendar-plus"></i>
                                                 </button>
                                             </form>
                                             <form method="POST" action="/admin/delete_license" style="display: inline;">
-                                                <input type="hidden" name="license_key" value="{{ license.license_key }}">
+                                                <input type="hidden" name="license_key" value="{{ license.license_key if license.license_key else license[0] }}">
                                                 <button type="submit" class="btn btn-danger" 
-                                                        onclick="return confirm('Delete license {{ license.license_key }}?')">
+                                                        onclick="return confirm('Delete license {{ license.license_key if license.license_key else license[0] }}?')">
                                                     <i class="bi bi-trash"></i>
                                                 </button>
                                             </form>
@@ -2478,7 +2555,7 @@ ENHANCED_ADMIN_HTML = '''
         <div id="validations" class="tab-content">
             <div class="card">
                 <div class="card-header">
-                    <span><i class="bi bi-activity"></i> Recent Validation Attempts ({{ (recent_validations | length) or 0 }} shown)</span>
+                    <span><i class="bi bi-activity"></i> Recent Validation Attempts ({{ (recent_validations | length) if recent_validations else 0 }} shown)</span>
                 </div>
                 <div class="card-body">
                     {% if recent_validations %}
@@ -2497,24 +2574,24 @@ ENHANCED_ADMIN_HTML = '''
                                 {% for validation in recent_validations %}
                                 <tr>
                                     <td>
-                                        <span class="license-key">{{ validation.license_key or 'N/A' }}</span>
+                                        <span class="license-key">{{ validation.license_key if validation.license_key else (validation[0] if validation|length > 0 else 'N/A') }}</span>
                                     </td>
                                     <td>
-                                        {% if validation.hardware_id %}
-                                            <span class="hardware-id">{{ validation.hardware_id }}</span>
+                                        {% if validation.hardware_id or (validation|length > 1 and validation[1]) %}
+                                            <span class="hardware-id">{{ validation.hardware_id if validation.hardware_id else validation[1] }}</span>
                                         {% else %}
                                             <span style="color: var(--text-secondary);">N/A</span>
                                         {% endif %}
                                     </td>
                                     <td>
-                                        {% if validation.status == 'VALID' %}
-                                            <span class="status-badge active">{{ validation.status }}</span>
+                                        {% if (validation.status if validation.status else (validation[2] if validation|length > 2 else '')) == 'VALID' %}
+                                            <span class="status-badge active">{{ validation.status if validation.status else validation[2] }}</span>
                                         {% else %}
-                                            <span class="status-badge inactive">{{ validation.status }}</span>
+                                            <span class="status-badge inactive">{{ validation.status if validation.status else (validation[2] if validation|length > 2 else 'Unknown') }}</span>
                                         {% endif %}
                                     </td>
-                                    <td>{{ validation.ip_address or 'Unknown' }}</td>
-                                    <td>{{ validation.timestamp | formatdatetimefull }}</td>
+                                    <td>{{ validation.ip_address if validation.ip_address else (validation[3] if validation|length > 3 else 'Unknown') }}</td>
+                                    <td>{{ validation.timestamp | formatdatetimefull if validation.timestamp else (validation[4] | formatdatetimefull if validation|length > 4 else 'N/A') }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>
@@ -2574,35 +2651,61 @@ ENHANCED_ADMIN_HTML = '''
                                     <th>Filename</th>
                                     <th>Version</th>
                                     <th>Upload Date</th>
-                                    <th>Uploaded By</th>
+                                    <th>Build Info</th>
                                     <th>Build Status</th>
-                                    <th>GitHub URL</th>
+                                    <th>Links</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {% for upload in client_uploads %}
                                 <tr>
-                                    <td>{{ upload.filename }}</td>
-                                    <td>{{ upload.version_tag or 'N/A' }}</td>
-                                    <td>{{ upload.upload_date | formatdatetimefull }}</td>
-                                    <td>{{ upload.uploaded_by or 'Unknown' }}</td>
+                                    <td>{{ upload.filename if upload.filename else (upload[0] if upload|length > 0 else 'N/A') }}</td>
+                                    <td>{{ upload.version_tag if upload.version_tag else (upload[3] if upload|length > 3 else 'N/A') }}</td>
+                                    <td>{{ upload.upload_date | formatdatetimefull if upload.upload_date else (upload[1] | formatdatetimefull if upload|length > 1 else 'N/A') }}</td>
                                     <td>
-                                        {% if upload.build_status == 'completed' %}
+                                        <div style="font-size: 0.8rem;">
+                                            {% set build_num = upload.build_number if upload.build_number else (upload[6] if upload|length > 6 else '') %}
+                                            {% set commit = upload.commit_sha if upload.commit_sha else (upload[7] if upload|length > 7 else '') %}
+                                            {% if build_num %}
+                                                <div><strong>Build:</strong> #{{ build_num }}</div>
+                                            {% endif %}
+                                            {% if commit %}
+                                                <div><strong>Commit:</strong> {{ commit[:8] }}...</div>
+                                            {% endif %}
+                                            <div><strong>By:</strong> {{ upload.uploaded_by if upload.uploaded_by else (upload[2] if upload|length > 2 else 'Unknown') }}</div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        {% set status = upload.build_status if upload.build_status else (upload[4] if upload|length > 4 else 'pending') %}
+                                        {% if status == 'completed' %}
                                             <span class="status-badge active">Completed</span>
-                                        {% elif upload.build_status == 'uploaded' %}
+                                        {% elif status == 'uploaded' %}
                                             <span class="status-badge" style="background: #fbbf24; color: #92400e;">Uploaded</span>
                                         {% else %}
-                                            <span class="status-badge inactive">{{ upload.build_status or 'Pending' }}</span>
+                                            <span class="status-badge inactive">{{ status or 'Pending' }}</span>
                                         {% endif %}
                                     </td>
                                     <td>
-                                        {% if upload.github_url %}
-                                            <a href="{{ upload.github_url }}" target="_blank" class="btn btn-primary" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;">
-                                                <i class="bi bi-link-45deg"></i> View
-                                            </a>
-                                        {% else %}
-                                            N/A
-                                        {% endif %}
+                                        <div style="display: flex; gap: 0.25rem; flex-direction: column;">
+                                            {% set github_url = upload.github_url if upload.github_url else (upload[5] if upload|length > 5 else '') %}
+                                            {% set release_url = upload.release_url if upload.release_url else (upload[8] if upload|length > 8 else '') %}
+                                            
+                                            {% if github_url %}
+                                                <a href="{{ github_url }}" target="_blank" class="btn btn-primary" style="font-size: 0.7rem; padding: 0.2rem 0.4rem;">
+                                                    <i class="bi bi-download"></i> Download
+                                                </a>
+                                            {% endif %}
+                                            
+                                            {% if release_url %}
+                                                <a href="{{ release_url }}" target="_blank" class="btn btn-success" style="font-size: 0.7rem; padding: 0.2rem 0.4rem;">
+                                                    <i class="bi bi-tag"></i> Release
+                                                </a>
+                                            {% endif %}
+                                            
+                                            {% if not github_url and not release_url %}
+                                                <span style="color: var(--text-secondary); font-size: 0.8rem;">N/A</span>
+                                            {% endif %}
+                                        </div>
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -2815,15 +2918,16 @@ ENHANCED_REPAIR_HTML = '''
             </div>
             <div class="card-body">
                 <p><strong>Initialization Attempts:</strong> {{ initialization_attempts }}</p>
-                <p><strong>Database Type:</strong> {{ db_status.type }}</p>
+                <p><strong>Database Type:</strong> {{ db_status.type if db_status else 'Unknown' }}</p>
                 <p><strong>Connection Status:</strong>
-                    {% if db_status.connection %}
+                    {% if db_status and db_status.connection %}
                         <span class="status-badge status-success">Connected</span>
                     {% else %}
                         <span class="status-badge status-error">Disconnected</span>
                     {% endif %}
                 </p>
 
+                {% if db_status and db_status.tables %}
                 <h4 style="margin: 1.5rem 0 1rem 0;">Table Status:</h4>
                 <table class="diagnostic-table">
                     <thead>
@@ -2849,6 +2953,7 @@ ENHANCED_REPAIR_HTML = '''
                         {% endfor %}
                     </tbody>
                 </table>
+                {% endif %}
             </div>
         </div>
 
