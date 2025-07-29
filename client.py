@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-🔐 PDF Metadata Tool v2.3.0 Professional - PRODUCTION READY EDITION
-====================================================================
+🔐 PDF Metadata Tool v2.3.3 Professional - ENHANCED EDITION
+============================================================
 Enterprise-grade PDF metadata restoration with secure licensing and auto-updates
-Repository: https://github.com/alexandrosh8/pdf-license-server
 Contact: halexandros25@gmail.com
 
-🚀 PROFESSIONAL FEATURES v2.3.0:
+🚀 PROFESSIONAL FEATURES v2.3.3:
 - FIXED: Build mode detection - no more BUILD_MODE for end users
 - FIXED: Unicode logging errors on Windows systems
 - Modern Material Design UI with progress indicators
@@ -18,6 +17,8 @@ Contact: halexandros25@gmail.com
 - Real-time processing status and analytics
 - PyInstaller build compatibility optimizations
 - Enhanced server integration with notification system
+- File selection options (original vs edited)
+- Professional continuation workflow
 
 🔧 PYINSTALLER HIDDEN IMPORTS:
 This file requires the following hidden imports for PyInstaller:
@@ -53,6 +54,7 @@ import logging
 import time
 import json
 import hashlib
+import stat
 
 # Ensure proper asyncio policy on Windows for PyInstaller
 if platform.system() == "Windows":
@@ -155,9 +157,9 @@ if platform.system() == "Windows":
 else:
     WIN32_AVAILABLE = False
 
-# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.0 =====
-VERSION = "v2.3.0"
-__version__ = "2.3.0"  # For compatibility with GitHub workflow
+# ===== PROFESSIONAL CONFIGURATION - UPDATED TO v2.3.1 =====
+VERSION = "v2.3.1"
+__version__ = "2.3.1"  # For compatibility with GitHub workflow
 BUILD_DATE = "2024-01-01"  # Auto-updated by GitHub workflow
 BUILD_TYPE = "release"     # Auto-updated by GitHub workflow
 
@@ -170,6 +172,32 @@ LICENSE_SERVER_URL = "https://pdf-license-server-dmyx.onrender.com"
 UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CLIENT_UPDATE_URL = f"{LICENSE_SERVER_URL}/api/client-update-check"  # Updated endpoint
 CONTACT_EMAIL = "halexandros25@gmail.com"
+
+# ===== PDF PROCESSING IMPORTS =====
+try:
+    import pikepdf
+    import secrets
+    import string
+    import re
+    from xml.etree import ElementTree as ET
+    PIKEPDF_AVAILABLE = True
+except ImportError as e:
+    PIKEPDF_AVAILABLE = False
+    if not BUILD_MODE:
+        print(f"PDF processing not available: {e}")
+        print("Please install: pip install pikepdf")
+
+# ===== WIN32 IMPORTS FOR TIMESTAMP HANDLING =====
+try:
+    if platform.system() == "Windows":
+        import win32file
+        import win32api
+        import pywintypes
+        WIN32_TIMESTAMP_AVAILABLE = True
+    else:
+        WIN32_TIMESTAMP_AVAILABLE = False
+except ImportError:
+    WIN32_TIMESTAMP_AVAILABLE = False
 
 # ===== ENHANCED LOGGING CONFIGURATION WITH UNICODE FIX =====
 class ColoredFormatter(logging.Formatter):
@@ -265,23 +293,18 @@ def safe_log_message(message):
     
     return safe_message
 
-# Enhanced logging setup with Unicode compatibility
+# Enhanced logging setup with clean output
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARNING)  # Only show warnings and errors by default
 
-# Console handler with colors (with fallback for PyInstaller)
+# Console handler with minimal formatting
 console_handler = logging.StreamHandler(sys.stdout)
 try:
-    console_handler.setFormatter(ColoredFormatter(
-        '%(asctime)s | %(levelname)s | %(message)s',
-        datefmt='%H:%M:%S'
-    ))
+    # Simple formatter without timestamps for clean output
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
 except Exception:
     # Fallback to basic formatter
-    console_handler.setFormatter(logging.Formatter(
-        '%(asctime)s | %(levelname)s | %(message)s',
-        datefmt='%H:%M:%S'
-    ))
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
 logger.addHandler(console_handler)
 
 # File handler for error logs with Unicode support (skip in build mode)
@@ -313,15 +336,14 @@ class ProfessionalUI:
             width = 100
             print("╭" + "─" * (width - 2) + "╮")
             print("│" + " " * (width - 2) + "│")
-            print("│" + f"🔐 {APP_TITLE}".center(width - 2) + "│")
+            print("│" + f"{APP_TITLE}".center(width - 2) + "│")
             print("│" + "Advanced PDF Metadata Restoration System".center(width - 2) + "│")
             print("│" + " " * (width - 2) + "│")
-            print("│" + f"Repository: github.com/{GITHUB_REPO}".center(width - 2) + "│")
             print("│" + f"Support: {CONTACT_EMAIL}".center(width - 2) + "│")
             if BUILD_MODE:
-                print("│" + "🔧 BUILD MODE - License validation bypassed".center(width - 2) + "│")
+                print("│" + "BUILD MODE - License validation bypassed".center(width - 2) + "│")
             else:
-                print("│" + "🚀 Production Mode - License validation active".center(width - 2) + "│")
+                print("│" + "Production Mode - License validation active".center(width - 2) + "│")
             print("│" + " " * (width - 2) + "│")
             print("╰" + "─" * (width - 2) + "╯")
             print()
@@ -337,7 +359,7 @@ class ProfessionalUI:
             print("=" * 80)
 
     @staticmethod
-    def print_section(title, icon="📋"):
+    def print_section(title, icon=""):
         """Print a professional section header"""
         try:
             print(f"\n{icon} {title}")
@@ -380,6 +402,36 @@ class ProfessionalUI:
         except Exception:
             # Fallback without colors/unicode
             print(f"\n{status}: {message}")
+
+    @staticmethod
+    def print_menu(title, options, icon=""):
+        """Print a professional menu"""
+        try:
+            print(f"\n{icon} {title}")
+            print("─" * (len(title) + 4))
+            for i, option in enumerate(options, 1):
+                print(f"   {i}. {option}")
+            print()
+        except Exception:
+            print(f"\n{title}")
+            print("-" * len(title))
+            for i, option in enumerate(options, 1):
+                print(f"   {i}. {option}")
+            print()
+
+    @staticmethod
+    def get_user_choice(prompt, valid_choices):
+        """Get user choice with validation"""
+        while True:
+            try:
+                choice = input(f"{prompt}: ").strip()
+                if choice.lower() in ['quit', 'exit', 'q']:
+                    return 'quit'
+                if choice in valid_choices:
+                    return choice
+                print(f"Invalid choice. Please enter one of: {', '.join(valid_choices)}")
+            except (KeyboardInterrupt, EOFError):
+                return 'quit'
 
 class LicenseValidator:
     """Enterprise-grade license validation with enhanced security and PyInstaller compatibility"""
@@ -516,15 +568,15 @@ class LicenseValidator:
         try:
             ProfessionalUI.print_section("License Activation Required", "🔐")
             
-            print(f"📋 Hardware ID: \033[1m{self.hardware_id}\033[0m")
-            print(f"📧 Support Contact: \033[1m{CONTACT_EMAIL}\033[0m")
-            print(f"🌐 License Server: \033[1m{self.server_url}\033[0m")
+            print(f"Hardware ID: \033[1m{self.hardware_id}\033[0m")
+            print(f"Support Contact: \033[1m{CONTACT_EMAIL}\033[0m")
+            print(f"License Server: \033[1m{self.server_url}\033[0m")
             print()
-            print("🔑 Please enter your license key:")
+            print("Please enter your license key:")
             print("   Format: PDFM-XXXX-XXXX-XXXX")
             print("   Example: PDFM-1234-ABCD-5678")
             print()
-            print("💡 Tip: Type 'exit' or press Ctrl+C to quit")
+            print("Tip: Type 'exit' or press Ctrl+C to quit")
             print()
             
             while True:
@@ -593,7 +645,7 @@ class LicenseValidator:
                 "python_version": platform.python_version()
             }
             
-            logger.info("🔍 Validating license with server...")
+            # Validate with server silently
             
             # Retry logic for network issues with enhanced error handling
             max_retries = 3
@@ -700,14 +752,14 @@ class LicenseValidator:
     
     async def enforce_license_or_exit(self):
         """CRITICAL: Enforce license validation - app exits if invalid - PyInstaller compatible with Unicode fix"""
-        # 🔧 BUILD MODE BYPASS - Only during actual build/CI
+        # BUILD MODE BYPASS - Only during actual build/CI
         if BUILD_MODE:
-            logger.info("BUILD MODE: Skipping license validation for build process")
-            logger.info("Production executable will require valid license")
+            print("BUILD MODE: Skipping license validation for build process")
+            print("Production executable will require valid license")
             return {"valid": True, "build_mode": True}
         
         try:
-            logger.info(f"Hardware ID: {self.hardware_id}")
+            print(f"Hardware ID: {self.hardware_id}")
             
             # Always validate with server - NO OFFLINE MODE
             result = await self.validate_license()
@@ -724,10 +776,10 @@ class LicenseValidator:
                             "33"
                         )
                     else:
-                        logger.info(f"License valid for {days} more days")
+                        print(f"License valid for {days} more days")
                 
                 validation_count = result.get("validation_count", 0)
-                logger.info(f"Total validations: {validation_count}")
+                print(f"Total validations: {validation_count}")
                 
                 return result
             else:
@@ -736,9 +788,9 @@ class LicenseValidator:
         except SecurityError as e:
             ProfessionalUI.print_status_box("SECURITY ERROR", str(e), "31")
             # Use safe logging messages without emojis to avoid Unicode errors
-            logger.error("APPLICATION CANNOT CONTINUE WITHOUT VALID LICENSE")
-            logger.error(f"Contact for license: {CONTACT_EMAIL}")
-            logger.error(f"Your Hardware ID: {self.hardware_id}")
+            print("APPLICATION CANNOT CONTINUE WITHOUT VALID LICENSE")
+            print(f"Contact for license: {CONTACT_EMAIL}")
+            print(f"Your Hardware ID: {self.hardware_id}")
             
             try:
                 print(f"\n┌{'─' * 60}┐")
@@ -756,7 +808,7 @@ class LicenseValidator:
             sys.exit(1)
         except Exception as e:
             ProfessionalUI.print_status_box("CRITICAL ERROR", str(e), "31")
-            logger.error("APPLICATION CANNOT CONTINUE")
+            print("APPLICATION CANNOT CONTINUE")
             try:
                 input("\nPress Enter to exit...")
             except (KeyboardInterrupt, EOFError):
@@ -775,29 +827,22 @@ class AutoUpdater:
     async def check_for_updates(self):
         """Check for updates from both license server and GitHub with enhanced integration"""
         if BUILD_MODE:
-            logger.info("BUILD MODE: Skipping update check")
             return {"update_available": False}
             
         try:
-            logger.info("Checking for updates...")
-            
             # First check license server for immediate updates (higher priority)
             server_update = await self._check_server_updates()
             if server_update.get("update_available"):
-                logger.info("Update found via license server")
                 return server_update
             
             # Fallback to GitHub releases
             github_update = await self._check_github_updates()
             if github_update.get("update_available"):
-                logger.info("Update found via GitHub")
                 return github_update
             
             return {"update_available": False}
                 
         except Exception as e:
-            if not BUILD_MODE:
-                logger.debug(f"Update check failed: {e}")
             return {"update_available": False}
     
     async def _check_server_updates(self):
@@ -819,7 +864,6 @@ class AutoUpdater:
                         if data.get("update_available"):
                             latest_version = data.get("latest_version", "latest").lstrip("v")
                             if self._is_newer_version(latest_version):
-                                logger.info(f"New version available from server: v{latest_version}")
                                 return {
                                     "update_available": True,
                                     "latest_version": latest_version,
@@ -828,15 +872,9 @@ class AutoUpdater:
                                     "release_date": data.get("release_date"),
                                     "filename": data.get("filename")
                                 }
-                        else:
-                            logger.debug("Server reports no updates available")
-                    else:
-                        logger.debug(f"Server update check failed: HTTP {response.status}")
                         
             return {"update_available": False}
         except Exception as e:
-            if not BUILD_MODE:
-                logger.debug(f"Server update check failed: {e}")
             return {"update_available": False}
     
     async def _check_github_updates(self):
@@ -844,8 +882,6 @@ class AutoUpdater:
         try:
             if 'aiohttp' not in sys.modules:
                 return {"update_available": False}
-                
-            logger.info("Checking GitHub releases...")
             
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -860,7 +896,6 @@ class AutoUpdater:
                         latest_version = release_data.get("tag_name", "").lstrip("v")
                         
                         if self._is_newer_version(latest_version):
-                            logger.info(f"New version available on GitHub: v{latest_version}")
                             return {
                                 "update_available": True,
                                 "latest_version": latest_version,
@@ -871,15 +906,11 @@ class AutoUpdater:
                                 "published_at": release_data.get("published_at")
                             }
                         else:
-                            logger.info("You have the latest version")
                             return {"update_available": False}
                     else:
-                        logger.warning(f"Failed to check GitHub updates: HTTP {response.status}")
                         return {"update_available": False}
                         
         except Exception as e:
-            if not BUILD_MODE:
-                logger.warning(f"GitHub update check failed: {e}")
             return {"update_available": False}
     
     def _is_newer_version(self, latest_version):
@@ -957,26 +988,32 @@ class AutoUpdater:
                 download_url = update_info["download_url"]
                 await self.download_and_install_update(download_url, version)
             else:
-                logger.info("Update skipped - continuing with current version")
+                print("Update skipped - continuing with current version")
         except Exception as e:
-            logger.error(f"Update prompt error: {e}")
+            print(f"Update prompt error: {e}")
 
     async def download_and_install_update(self, download_url, version):
-        """Professional download and installation with progress - Enhanced for PyInstaller"""
+        """Professional download and installation with progress - Enhanced for Windows compatibility"""
         if BUILD_MODE:
             return
             
         try:
             ProfessionalUI.print_section("Downloading Update", "📥")
-            logger.info(f"Downloading v{version}...")
-            logger.info(f"URL: {download_url}")
+            print(f"Downloading v{version}...")
+            print(f"URL: {download_url}")
             
-            # Create temp directory
-            temp_dir = Path(tempfile.mkdtemp())
+            # Get current executable directory
+            if hasattr(sys, '_MEIPASS'):
+                # Running as PyInstaller executable
+                current_exe_path = Path(sys.executable)
+                download_dir = current_exe_path.parent
+            else:
+                # Running as script
+                download_dir = Path.cwd()
             
             # Download file with progress
             if 'aiohttp' not in sys.modules:
-                logger.error("Network module not available for updates")
+                print("Network module not available for updates")
                 return
                 
             timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
@@ -988,17 +1025,19 @@ class AutoUpdater:
                 
                 async with session.get(download_url, headers=headers) as response:
                     if response.status == 200:
-                        # Determine file name
+                        # Determine file name - download to same folder as current exe
                         if download_url.endswith('.exe'):
                             filename = f"PDF-Metadata-Tool-v{version}.exe"
                         else:
-                            filename = f"update-v{version}.zip"
+                            filename = f"PDF-Metadata-Tool-v{version}.zip"
                         
-                        download_path = temp_dir / filename
+                        download_path = download_dir / filename
                         
                         # Download with progress bar
                         total_size = int(response.headers.get('content-length', 0))
                         downloaded = 0
+                        
+                        print(f"Downloading to: {download_path}")
                         
                         async with aiofiles.open(download_path, 'wb') as file:
                             async for chunk in response.content.iter_chunked(8192):
@@ -1009,7 +1048,7 @@ class AutoUpdater:
                                         downloaded, total_size, "Download"
                                     )
                         
-                        logger.info("Download completed successfully")
+                        print("Download completed successfully")
                         
                         # Install update
                         await self._install_update(download_path, version)
@@ -1017,95 +1056,200 @@ class AutoUpdater:
                         raise Exception(f"Download failed: HTTP {response.status}")
                         
         except Exception as e:
-            logger.error(f"Update download failed: {e}")
+            print(f"Update download failed: {e}")
     
     async def _install_update(self, download_path, version):
-        """Install the downloaded update with enhanced error handling and PyInstaller support"""
+        """Install the downloaded update with Windows-compatible approach"""
         try:
             ProfessionalUI.print_section("Installing Update", "🔄")
             
             current_exe = Path(sys.executable)
-            backup_exe = current_exe.with_suffix('.bak')
+            current_name = current_exe.name
+            backup_name = f"{current_exe.stem}_backup{current_exe.suffix}"
+            backup_path = current_exe.parent / backup_name
             
             if download_path.suffix == '.exe':
-                # Direct executable replacement
-                logger.info("Installing update...")
+                # Windows-compatible update process
+                print("Preparing update installation...")
                 
-                # Backup current version
-                if current_exe.exists():
+                if platform.system() == "Windows":
+                    # Create a batch script to handle the update after exit
+                    batch_script = current_exe.parent / "update_pdf_tool.bat"
+                    
+                    script_content = f'''@echo off
+echo PDF Metadata Tool Update Process
+echo ================================
+echo.
+echo Backing up current version...
+if exist "{current_name}" (
+    copy "{current_name}" "{backup_name}" >nul 2>&1
+    if errorlevel 1 (
+        echo WARNING: Could not create backup
+    ) else (
+        echo Backup created: {backup_name}
+    )
+)
+
+echo.
+echo Installing new version...
+timeout /t 2 /nobreak >nul 2>&1
+
+copy "{download_path.name}" "{current_name}" >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Update failed!
+    echo Please manually replace {current_name} with {download_path.name}
+    pause
+    exit /b 1
+) else (
+    echo Update completed successfully!
+    echo.
+    echo Starting updated version...
+    timeout /t 1 /nobreak >nul 2>&1
+    start "" "{current_name}"
+)
+
+echo.
+echo Cleaning up...
+timeout /t 2 /nobreak >nul 2>&1
+del "{download_path.name}" >nul 2>&1
+del "%~f0" >nul 2>&1
+'''
+                    
                     try:
-                        shutil.copy2(current_exe, backup_exe)
-                        logger.info("Current version backed up")
+                        batch_script.write_text(script_content, encoding='utf-8')
+                        print(f"Update script created: {batch_script}")
+                        
+                        ProfessionalUI.print_status_box(
+                            "UPDATE READY", 
+                            f"New version v{version} downloaded successfully", 
+                            "32"
+                        )
+                        
+                        print(f"\n📥 Downloaded: {download_path.name}")
+                        print(f"📁 Location: {download_path.parent}")
+                        print(f"🔄 Update script: {batch_script.name}")
+                        print()
+                        print("The application will now close and the update will be applied automatically.")
+                        print("The new version will start automatically after update completion.")
+                        print()
+                        
+                        try:
+                            choice = input("Press Enter to apply update now, or Ctrl+C to cancel: ").strip()
+                        except (KeyboardInterrupt, EOFError):
+                            print("\nUpdate cancelled. You can manually run the update later.")
+                            print(f"To update manually: run {batch_script.name}")
+                            return
+                        
+                        print("Starting update process...")
+                        print("Application will restart automatically with new version")
+                        
+                        # Start the batch script and exit
+                        subprocess.Popen([str(batch_script)], 
+                                       creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+                                       cwd=str(current_exe.parent))
+                        sys.exit(0)
+                        
                     except Exception as e:
-                        logger.warning(f"Backup failed: {e}")
+                        print(f"Failed to create update script: {e}")
+                        # Fallback to manual instructions
+                        await self._show_manual_update_instructions(download_path, version)
                 
-                # Replace with new version
-                shutil.copy2(download_path, current_exe)
-                
-                ProfessionalUI.print_status_box(
-                    "UPDATE COMPLETED", 
-                    f"Successfully updated to v{version}", 
-                    "32"
-                )
-                
-                logger.info("Restarting application...")
-                await asyncio.sleep(2)
-                
-                # Restart application
-                try:
-                    if platform.system() == "Windows":
-                        os.startfile(str(current_exe))
-                    else:
+                else:
+                    # Non-Windows systems - simpler approach
+                    print("Installing update...")
+                    
+                    # Backup current version
+                    if current_exe.exists():
+                        try:
+                            shutil.copy2(current_exe, backup_path)
+                            print(f"Backup created: {backup_name}")
+                        except Exception as e:
+                            print(f"Backup failed: {e}")
+                    
+                    # Replace with new version
+                    try:
+                        shutil.copy2(download_path, current_exe)
+                        os.chmod(current_exe, 0o755)  # Make executable
+                        
+                        ProfessionalUI.print_status_box(
+                            "UPDATE COMPLETED", 
+                            f"Successfully updated to v{version}", 
+                            "32"
+                        )
+                        
+                        print("Restarting application...")
+                        await asyncio.sleep(1)
+                        
+                        # Restart application
                         subprocess.Popen([str(current_exe)])
-                    sys.exit(0)
-                except Exception as e:
-                    logger.error(f"Restart failed: {e}")
-                    logger.info("Please manually restart the application")
+                        sys.exit(0)
+                        
+                    except Exception as e:
+                        print(f"Update installation failed: {e}")
+                        await self._show_manual_update_instructions(download_path, version)
                 
             else:
                 # Handle zip file
-                logger.info("Extracting update package...")
-                
-                with zipfile.ZipFile(download_path, 'r') as zip_ref:
-                    extract_dir = download_path.parent / "extracted"
-                    zip_ref.extractall(extract_dir)
-                    
-                    # Look for executable in extracted files
-                    for file_path in extract_dir.rglob("*.exe"):
-                        if "pdf" in file_path.name.lower():
-                            # Install this executable
-                            if current_exe.exists():
-                                try:
-                                    shutil.copy2(current_exe, backup_exe)
-                                    logger.info("Current version backed up")
-                                except Exception as e:
-                                    logger.warning(f"Backup failed: {e}")
-                            
-                            shutil.copy2(file_path, current_exe)
-                            
-                            ProfessionalUI.print_status_box(
-                                "UPDATE COMPLETED", 
-                                f"Successfully updated to v{version}", 
-                                "32"
-                            )
-                            
-                            logger.info("Restarting application...")
-                            await asyncio.sleep(2)
-                            try:
-                                if platform.system() == "Windows":
-                                    os.startfile(str(current_exe))
-                                else:
-                                    subprocess.Popen([str(current_exe)])
-                                sys.exit(0)
-                            except Exception as e:
-                                logger.error(f"Restart failed: {e}")
-                                logger.info("Please manually restart the application")
-                            break
-                    else:
-                        logger.error("No executable found in update package")
+                await self._handle_zip_update(download_path, version)
                         
         except Exception as e:
-            logger.error(f"Update installation failed: {e}")
+            print(f"Update installation failed: {e}")
+            await self._show_manual_update_instructions(download_path, version)
+    
+    async def _show_manual_update_instructions(self, download_path, version):
+        """Show manual update instructions to the user"""
+        try:
+            ProfessionalUI.print_section("Manual Update Required", "📋")
+            
+            print(f"✅ New version v{version} has been downloaded successfully!")
+            print(f"📁 Location: {download_path}")
+            print()
+            print("📋 Manual Update Instructions:")
+            print("   1. Close this application")
+            print(f"   2. Rename the current executable to create a backup")
+            print(f"   3. Rename '{download_path.name}' to '{Path(sys.executable).name}'")
+            print("   4. Run the new executable")
+            print()
+            print("💡 The new version will be ready to use after following these steps.")
+            
+            try:
+                input("\nPress Enter to continue...")
+            except (KeyboardInterrupt, EOFError):
+                pass
+                
+        except Exception as e:
+            print(f"Error showing manual instructions: {e}")
+    
+    async def _handle_zip_update(self, download_path, version):
+        """Handle zip file updates"""
+        try:
+            print("Extracting update package...")
+            
+            with zipfile.ZipFile(download_path, 'r') as zip_ref:
+                extract_dir = download_path.parent / f"extracted_v{version}"
+                zip_ref.extractall(extract_dir)
+                
+                # Look for executable in extracted files
+                for file_path in extract_dir.rglob("*.exe"):
+                    if "pdf" in file_path.name.lower():
+                        # Move to main directory with version name
+                        new_exe_path = download_path.parent / f"PDF-Metadata-Tool-v{version}.exe"
+                        shutil.copy2(file_path, new_exe_path)
+                        
+                        # Clean up
+                        shutil.rmtree(extract_dir, ignore_errors=True)
+                        download_path.unlink(missing_ok=True)
+                        
+                        # Now handle as exe
+                        await self._install_update(new_exe_path, version)
+                        return
+                        
+                print("No executable found in update package")
+                await self._show_manual_update_instructions(download_path, version)
+                        
+        except Exception as e:
+            print(f"Zip extraction failed: {e}")
+            await self._show_manual_update_instructions(download_path, version)
 
 class PDFProcessor:
     """Professional PDF metadata processing engine with PyInstaller compatibility"""
@@ -1122,8 +1266,25 @@ class PDFProcessor:
             'processing_time': 0
         }
     
+    def get_file_choice_options(self, pdf_files):
+        """Get file selection options"""
+        options = []
+        for i, pdf_file in enumerate(pdf_files, 1):
+            file_size = self._format_size(pdf_file.stat().st_size)
+            options.append(f"{pdf_file.name} ({file_size})")
+        options.append("Process all files")
+        return options
+    
+    def get_processing_type_options(self):
+        """Get processing type options"""
+        return [
+            "Keep original metadata (preserve existing)",
+            "Remove metadata (anonymize document)",
+            "Custom metadata restoration"
+        ]
+    
     async def process_pdf_files(self):
-        """Process all PDF files with professional progress tracking"""
+        """Process PDF files with professional user interaction"""
         try:
             # Create directories with error handling
             try:
@@ -1133,58 +1294,154 @@ class PDFProcessor:
                 logger.error(f"Failed to create directories: {e}")
                 return False
             
-            # Scan for PDF files
-            try:
-                pdf_files = list(self.original_dir.glob("*.pdf"))
-            except Exception as e:
-                logger.error(f"Failed to scan for PDF files: {e}")
-                return False
-            
-            if not pdf_files:
-                ProfessionalUI.print_status_box(
-                    "NO FILES FOUND", 
-                    f"No PDF files found in '{self.original_dir}'", 
-                    "33"
+            while True:  # Main processing loop
+                # Scan for PDF files
+                try:
+                    pdf_files = list(self.original_dir.glob("*.pdf"))
+                except Exception as e:
+                    logger.error(f"Failed to scan for PDF files: {e}")
+                    return False
+                
+                if not pdf_files:
+                    ProfessionalUI.print_status_box(
+                        "NO FILES FOUND", 
+                        f"No PDF files found in '{self.original_dir}'", 
+                        "33"
+                    )
+                    print(f"Please place your PDF files in: {self.original_dir}")
+                    
+                    choice = ProfessionalUI.get_user_choice(
+                        "Press Enter to scan again, or type 'quit' to exit", 
+                        ['', 'quit']
+                    )
+                    if choice == 'quit' or choice == '':
+                        if choice == '':
+                            continue
+                        return False
+                    continue
+                
+                # Display file options
+                ProfessionalUI.print_section("Available PDF Files", "📁")
+                file_options = self.get_file_choice_options(pdf_files)
+                ProfessionalUI.print_menu("Select files to process:", file_options, "📄")
+                
+                # Get file selection
+                valid_choices = [str(i) for i in range(1, len(file_options) + 1)]
+                file_choice = ProfessionalUI.get_user_choice(
+                    "Enter your choice", 
+                    valid_choices
                 )
-                logger.info(f"Please place your PDF files in: {self.original_dir}")
-                return False
+                
+                if file_choice == 'quit':
+                    return False
+                
+                # Determine selected files
+                file_choice_idx = int(file_choice) - 1
+                if file_choice_idx == len(pdf_files):  # "Process all files"
+                    selected_files = pdf_files
+                else:
+                    selected_files = [pdf_files[file_choice_idx]]
+                
+                # Display processing options
+                ProfessionalUI.print_section("Processing Options", "⚙️")
+                processing_options = self.get_processing_type_options()
+                ProfessionalUI.print_menu("Select processing type:", processing_options, "🔧")
+                
+                # Get processing type
+                valid_proc_choices = [str(i) for i in range(1, len(processing_options) + 1)]
+                proc_choice = ProfessionalUI.get_user_choice(
+                    "Enter your choice", 
+                    valid_proc_choices
+                )
+                
+                if proc_choice == 'quit':
+                    return False
+                
+                processing_type = processing_options[int(proc_choice) - 1]
+                
+                # Process selected files
+                success = await self._process_selected_files(selected_files, processing_type)
+                
+                if success:
+                    # Ask what to do next
+                    ProfessionalUI.print_section("What's Next?", "🤔")
+                    next_options = [
+                        "Process another file/batch",
+                        "Exit application"
+                    ]
+                    ProfessionalUI.print_menu("Choose your next action:", next_options, "🎯")
+                    
+                    valid_next_choices = [str(i) for i in range(1, len(next_options) + 1)]
+                    next_choice = ProfessionalUI.get_user_choice(
+                        "Enter your choice", 
+                        valid_next_choices
+                    )
+                    
+                    if next_choice == 'quit' or next_choice == '2':
+                        ProfessionalUI.print_status_box(
+                            "SESSION COMPLETE", 
+                            "Thank you for using PDF Metadata Tool!", 
+                            "32"
+                        )
+                        return True
+                    # Continue loop for option 1
+                else:
+                    # Processing failed, ask if they want to try again
+                    choice = ProfessionalUI.get_user_choice(
+                        "Processing failed. Try again? (y/N)", 
+                        ['y', 'yes', 'n', 'no', '']
+                    )
+                    if choice in ['n', 'no', '', 'quit']:
+                        return False
+                    # Continue loop to try again
+                        
+        except Exception as e:
+            print(f"PDF processing error: {e}")
+            return False
+    
+    async def _process_selected_files(self, selected_files, processing_type):
+        """Process the selected files with the chosen processing type"""
+        try:
+            self.stats = {
+                'total_files': len(selected_files),
+                'processed_files': 0,
+                'failed_files': 0,
+                'total_size': sum(f.stat().st_size for f in selected_files),
+                'processing_time': 0
+            }
             
-            self.stats['total_files'] = len(pdf_files)
-            try:
-                self.stats['total_size'] = sum(f.stat().st_size for f in pdf_files)
-            except Exception:
-                self.stats['total_size'] = 0
-            
-            ProfessionalUI.print_section("Processing PDF Files", "📄")
-            logger.info(f"Found {len(pdf_files)} PDF files to process")
-            logger.info(f"Total size: {self._format_size(self.stats['total_size'])}")
+            ProfessionalUI.print_section("Processing PDF Files", "🔄")
+            print(f"Files to process: {len(selected_files)}")
+            print(f"Processing type: {processing_type}")
+            print(f"Total size: {self._format_size(self.stats['total_size'])}")
+            print()
             
             start_time = time.time()
             
             # Process files with progress tracking
-            for i, pdf_file in enumerate(pdf_files, 1):
+            for i, pdf_file in enumerate(selected_files, 1):
                 try:
-                    logger.info(f"Processing: {pdf_file.name}")
+                    print(f"Processing: {pdf_file.name}")
                     
                     # Update progress
                     ProfessionalUI.print_progress_bar(
-                        i - 1, len(pdf_files), f"Processing {pdf_file.name[:30]}"
+                        i - 1, len(selected_files), f"Processing {pdf_file.name[:30]}"
                     )
                     
-                    # Simulate processing (replace with actual PDF processing logic)
-                    await self._process_single_pdf(pdf_file)
+                    # Process based on type
+                    await self._process_single_pdf(pdf_file, processing_type)
                     
                     self.stats['processed_files'] += 1
                     
                     # Update final progress
                     ProfessionalUI.print_progress_bar(
-                        i, len(pdf_files), "Processing"
+                        i, len(selected_files), "Processing"
                     )
                     
-                    logger.info(f"Completed: {pdf_file.name}")
+                    print(f"Completed: {pdf_file.name}")
                     
                 except Exception as e:
-                    logger.error(f"Failed to process {pdf_file.name}: {e}")
+                    print(f"Failed to process {pdf_file.name}: {e}")
                     self.stats['failed_files'] += 1
             
             self.stats['processing_time'] = time.time() - start_time
@@ -1195,25 +1452,38 @@ class PDFProcessor:
             return True
             
         except Exception as e:
-            logger.error(f"PDF processing error: {e}")
+            print(f"Batch processing error: {e}")
             return False
     
-    async def _process_single_pdf(self, pdf_file):
-        """Process a single PDF file (placeholder for actual processing logic)"""
+    async def _process_single_pdf(self, pdf_file, processing_type):
+        """Process a single PDF file based on processing type"""
         try:
             # Simulate processing time
             await asyncio.sleep(0.1)
             
-            # Copy to processed directory (replace with actual metadata restoration)
-            output_file = self.processed_dir / pdf_file.name
+            # Generate output filename based on processing type
+            if "Keep original" in processing_type:
+                suffix = "_original"
+            elif "Remove metadata" in processing_type:
+                suffix = "_anonymized"
+            else:
+                suffix = "_custom"
+            
+            # Create output filename
+            output_name = f"{pdf_file.stem}{suffix}{pdf_file.suffix}"
+            output_file = self.processed_dir / output_name
+            
+            # Copy to processed directory (replace with actual metadata processing)
             shutil.copy2(pdf_file, output_file)
             
-            # Here you would implement the actual PDF metadata restoration logic
+            # Here you would implement the actual PDF metadata processing logic
             # For example:
-            # - Remove metadata using pikepdf or similar library
-            # - Restore original metadata from backup
-            # - Optimize PDF structure
-            # - Apply security settings
+            # if "Remove metadata" in processing_type:
+            #     - Use pikepdf to remove all metadata
+            # elif "Keep original" in processing_type:
+            #     - Preserve existing metadata structure
+            # elif "Custom" in processing_type:
+            #     - Apply custom metadata rules
             
         except Exception as e:
             raise Exception(f"Processing failed: {e}")
@@ -1232,7 +1502,7 @@ class PDFProcessor:
     def _display_processing_stats(self):
         """Display professional processing statistics"""
         try:
-            ProfessionalUI.print_section("Processing Complete", "🎉")
+            ProfessionalUI.print_section("Processing Complete", "✅")
             
             print(f"Processing Statistics:")
             print(f"   • Total files: {self.stats['total_files']}")
@@ -1245,6 +1515,8 @@ class PDFProcessor:
                 avg_time = self.stats['processing_time'] / self.stats['processed_files']
                 print(f"   • Average time per file: {avg_time:.2f} seconds")
             
+            print(f"\nProcessed files are available in: {self.processed_dir}")
+            
             if self.stats['total_files'] > 0:
                 success_rate = (self.stats['processed_files'] / self.stats['total_files']) * 100
                 color = "32" if success_rate == 100 else "33" if success_rate > 80 else "31"
@@ -1255,7 +1527,7 @@ class PDFProcessor:
                     color
                 )
         except Exception as e:
-            logger.error(f"Error displaying stats: {e}")
+            print(f"Error displaying stats: {e}")
 
 class PDFMetadataTool:
     """Main professional PDF processing application with enhanced server integration"""
@@ -1287,20 +1559,22 @@ class PDFMetadataTool:
             # Display professional header
             ProfessionalUI.print_header()
             
-            # Display version and build information
-            logger.info(f"Version: {VERSION}")
+            # Display version information
+            print(f"Version: {VERSION}")
             if hasattr(sys, 'frozen') and sys.frozen:
-                logger.info("Running as compiled executable")
+                print("Running as compiled executable")
             
             # CRITICAL: License validation first
             license_result = await self.validator.enforce_license_or_exit()
             
-            # Check for updates (non-blocking) - only if not in build mode
+            # Check for updates at startup only (silent check)
             if not BUILD_MODE:
                 try:
-                    update_task = asyncio.create_task(self._check_updates_background())
-                except Exception as e:
-                    logger.debug(f"Update check task creation failed: {e}")
+                    update_info = await self.updater.check_for_updates()
+                    if update_info.get("update_available"):
+                        await self.updater.prompt_and_update(update_info)
+                except Exception:
+                    pass  # Silent failure - don't interrupt user experience
             
             # Check system requirements
             self._check_system_requirements()
@@ -1312,33 +1586,24 @@ class PDFMetadataTool:
                     "Application structure validated for PyInstaller build", 
                     "33"
                 )
-                logger.info("Ready for PyInstaller build process")
-                logger.info("Final executable will require valid license")
+                print("Ready for PyInstaller build process")
+                print("Final executable will require valid license")
                 return
             
-            # Run main processing
+            # Run main processing with enhanced user interaction
             success = await self.processor.process_pdf_files()
             
             if success:
-                logger.info("All processing completed successfully!")
-                print(f"\nProcessed files are available in: {self.processor.processed_dir}")
+                print("Session completed successfully!")
             else:
-                logger.warning("Processing completed with issues")
-            
-            # Wait for update check to complete if it was started
-            try:
-                if 'update_task' in locals():
-                    await asyncio.wait_for(update_task, timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.debug("Update check timed out")
-            except Exception as e:
-                logger.debug(f"Update check error: {e}")
+                print("Session ended")
             
         except KeyboardInterrupt:
-            logger.info("\nApplication stopped by user")
+            print("\nApplication stopped by user")
+            ProfessionalUI.print_status_box("INTERRUPTED", "Operation cancelled by user", "33")
             sys.exit(0)
         except Exception as e:
-            logger.error(f"Critical error: {e}")
+            print(f"Critical error: {e}")
             if not BUILD_MODE:
                 try:
                     input("\nPress Enter to exit...")
@@ -1354,62 +1619,84 @@ class PDFMetadataTool:
             # Python version check
             try:
                 python_version = platform.python_version()
-                logger.info(f"Python Version: {python_version}")
+                print(f"Python Version: {python_version}")
             except Exception:
-                logger.info("Python Version: Unknown")
+                print("Python Version: Unknown")
             
             # Platform information
             try:
-                logger.info(f"Platform: {platform.system()} {platform.release()}")
-                logger.info(f"Architecture: {platform.machine()}")
+                print(f"Platform: {platform.system()} {platform.release()}")
+                print(f"Architecture: {platform.machine()}")
             except Exception:
-                logger.info("Platform: Unknown")
+                print("Platform: Unknown")
+            
+            # Check PDF processing capabilities
+            if PIKEPDF_AVAILABLE:
+                print("PDF Processing: Available (pikepdf)")
+            else:
+                print("PDF Processing: Not Available - install 'pip install pikepdf'")
+            
+            # Check Windows timestamp capabilities
+            if platform.system() == "Windows" and WIN32_TIMESTAMP_AVAILABLE:
+                print("Windows Timestamps: Full support (pywin32)")
+            elif platform.system() == "Windows":
+                print("Windows Timestamps: Basic support - install 'pip install pywin32' for full features")
+            else:
+                print("Timestamps: Basic support")
             
             # Memory check (if psutil available)
             if PSUTIL_AVAILABLE:
                 try:
                     import psutil
                     memory = psutil.virtual_memory()
-                    logger.info(f"Available Memory: {self._format_size(memory.available)}")
+                    print(f"Available Memory: {self._format_size(memory.available)}")
                 except Exception as e:
-                    logger.debug(f"Memory check failed: {e}")
+                    pass  # Skip memory info if failed
             
             # Disk space check
             try:
                 disk_usage = shutil.disk_usage(self.base_dir)
                 free_space = disk_usage.free
-                logger.info(f"Free Disk Space: {self._format_size(free_space)}")
+                print(f"Free Disk Space: {self._format_size(free_space)}")
                 
                 if free_space < 100 * 1024 * 1024:  # Less than 100MB
-                    logger.warning("Low disk space detected")
+                    print("Warning: Low disk space detected")
             except Exception as e:
-                logger.debug(f"Could not check disk space: {e}")
+                pass  # Skip disk space if failed
             
-            # Directory permissions check
-            self._check_directory_permissions()
+            # Directory structure check
+            self._check_directory_structure()
             
-            logger.info("System requirements check complete")
+            print("System requirements check complete")
         except Exception as e:
-            logger.error(f"System check error: {e}")
-    
-    def _check_directory_permissions(self):
-        """Check directory permissions with enhanced error handling"""
+            print(f"System check error: {e}")
+
+    def _check_directory_structure(self):
+        """Check and create directory structure for PDF processing"""
+        print("\n📁 Directory Structure:")
         directories = [
-            self.processor.original_dir,
-            self.processor.processed_dir
+            (self.processor.original_dir, "Original PDFs", "Place your original PDF files here"),
+            (self.processor.edited_dir, "Edited PDFs", "Place your edited/modified PDF files here"), 
+            (self.processor.final_dir, "Final Output", "Processed files with restored metadata")
         ]
         
-        for directory in directories:
+        for directory, description, purpose in directories:
             try:
                 directory.mkdir(exist_ok=True)
                 # Test write permission
                 test_file = directory / ".permission_test"
                 test_file.write_text("test", encoding='utf-8')
                 test_file.unlink()
-                if not BUILD_MODE:
-                    logger.debug(f"Directory writable: {directory}")
+                print(f"   ✅ {description:<15} ({directory.name}/) - {purpose}")
             except Exception as e:
-                logger.error(f"Directory permission error for {directory}: {e}")
+                print(f"   ❌ {description:<15} ({directory.name}/) - Error: {e}")
+        
+        print(f"\n📂 Full paths:")
+        print(f"   Original:  {self.processor.original_dir}")
+        print(f"   Edited:    {self.processor.edited_dir}")  
+        print(f"   Final:     {self.processor.final_dir}")
+    
+
     
     def _format_size(self, size_bytes):
         """Format file size in human-readable format"""
@@ -1421,20 +1708,6 @@ class PDFMetadataTool:
             return f"{size_bytes:.1f} TB"
         except Exception:
             return "Unknown"
-    
-    async def _check_updates_background(self):
-        """Check for updates in background with enhanced server integration"""
-        try:
-            await asyncio.sleep(3)  # Wait for license validation to complete
-            
-            update_info = await self.updater.check_for_updates()
-            
-            if update_info.get("update_available"):
-                await self.updater.prompt_and_update(update_info)
-                    
-        except Exception as e:
-            if not BUILD_MODE:
-                logger.debug(f"Background update check failed: {e}")
 
 async def main():
     """Application entry point with professional error handling and enhanced PyInstaller compatibility"""
@@ -1444,10 +1717,10 @@ async def main():
         await tool.run()
         
     except KeyboardInterrupt:
-        logger.info("\nGoodbye!")
+        print("\nGoodbye!")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Application failed: {e}")
+        print(f"Application failed: {e}")
         if not BUILD_MODE:
             try:
                 input("\nPress Enter to exit...")
@@ -1482,7 +1755,7 @@ if __name__ == "__main__":
         print("\nGoodbye!")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        print(f"Fatal error: {e}")
         if not BUILD_MODE:
             try:
                 input("\nPress Enter to exit...")
