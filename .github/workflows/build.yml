@@ -41,13 +41,22 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller
+        
+        # Core networking and async dependencies
         pip install aiohttp aiofiles requests psutil cryptography pywin32
         
-        # Updated PDF dependencies
+        # FIXED: Added pikepdf for PDF processing (was missing!)
+        pip install pikepdf
+        
+        # Additional PDF dependencies
         pip install pillow PyPDF2 pypdf pymupdf reportlab urllib3 certifi
         pip install packaging setuptools wheel
         
         echo "✅ All dependencies installed successfully"
+        echo "📋 Verifying critical dependencies:"
+        python -c "import pikepdf; print('✅ pikepdf:', pikepdf.__version__)"
+        python -c "import aiohttp; print('✅ aiohttp:', aiohttp.__version__)"
+        python -c "import cryptography; print('✅ cryptography:', cryptography.__version__)"
 
     - name: Verify client.py exists
       run: |
@@ -123,6 +132,7 @@ jobs:
           --hidden-import=pywintypes `
           --hidden-import=win32file `
           --hidden-import=win32security `
+          --hidden-import=pikepdf `
           --hidden-import=PIL `
           --hidden-import=PIL.Image `
           --hidden-import=PyPDF2 `
@@ -131,10 +141,15 @@ jobs:
           --hidden-import=urllib3 `
           --hidden-import=certifi `
           --hidden-import=packaging `
+          --hidden-import=secrets `
+          --hidden-import=string `
+          --hidden-import=re `
+          --hidden-import=xml.etree.ElementTree `
           --collect-submodules=cryptography `
           --collect-submodules=win32api `
           --collect-submodules=PyPDF2 `
           --collect-submodules=pypdf `
+          --collect-submodules=pikepdf `
           --collect-all=PIL `
           --add-data="C:\hostedtoolcache\windows\Python\3.11.9\x64\Lib\site-packages\certifi\cacert.pem;certifi" `
           --noupx `
@@ -211,14 +226,24 @@ jobs:
           4. ✅ Start using the PDF Metadata Tool!
           
           ### ✨ What's New
-          - Fixed BUILD MODE detection - application now runs normally for end users
-          - Improved PyInstaller dependency packaging
-          - Enhanced error handling and user experience
+          - ✅ **FIXED:** Full PDF processing capabilities now included (pikepdf)
+          - ✅ **FIXED:** BUILD MODE detection - application runs normally for end users
+          - ✅ **FIXED:** Complete PyInstaller dependency packaging
+          - ✅ Enhanced error handling and user experience
+          - ✅ Advanced PDF metadata restoration with encryption support
+          
+          ### 🔧 Features
+          - 📄 Full PDF metadata restoration
+          - 🔐 PDF encryption/decryption support
+          - 📅 Exact timestamp preservation
+          - 🔄 3-folder workflow (original → edited → final)
+          - 🛡️ Professional security and licensing
           
           ### 🐛 Troubleshooting
-          If you see "BUILD MODE" message:
-          - This version should run in normal production mode
-          - If you still see build mode, please report the issue
+          If you encounter issues:
+          - Ensure you have a valid license key
+          - Check that PDF files are placed in correct folders
+          - Contact support if PDF processing features are unavailable
           
           ### 🔄 Auto-Update Feature
           The application automatically checks for updates on startup and will notify you when new versions are available.
