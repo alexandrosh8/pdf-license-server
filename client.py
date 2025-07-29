@@ -8,6 +8,7 @@ Contact: halexandros25@gmail.com
 
 🚀 PROFESSIONAL FEATURES v2.3.0:
 - FIXED: Build mode detection - no more BUILD_MODE for end users
+- FIXED: Unicode logging errors on Windows systems
 - Modern Material Design UI with progress indicators
 - Advanced PDF metadata restoration algorithms
 - Smart auto-update system with GitHub integration
@@ -103,7 +104,7 @@ try:
     import requests
 except ImportError as e:
     if not BUILD_MODE:
-        print(f"❌ Critical import error: {e}")
+        print(f"Critical import error: {e}")
         print("Please install required packages: pip install aiohttp aiofiles requests")
         sys.exit(1)
 
@@ -119,7 +120,7 @@ try:
     from concurrent.futures import ThreadPoolExecutor
     import signal
 except ImportError as e:
-    print(f"❌ System import error: {e}")
+    print(f"System import error: {e}")
     sys.exit(1)
 
 # ===== OPTIONAL IMPORTS WITH GRACEFUL FALLBACK =====
@@ -129,7 +130,7 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
     if not BUILD_MODE:
-        print("⚠️ psutil not available - some system info features disabled")
+        print("psutil not available - some system info features disabled")
 
 try:
     import cryptography
@@ -137,7 +138,7 @@ try:
 except ImportError:
     CRYPTOGRAPHY_AVAILABLE = False
     if not BUILD_MODE:
-        print("⚠️ cryptography not available - some security features disabled")
+        print("cryptography not available - some security features disabled")
 
 # ===== WINDOWS-SPECIFIC IMPORTS =====
 if platform.system() == "Windows":
@@ -150,7 +151,7 @@ if platform.system() == "Windows":
     except ImportError:
         WIN32_AVAILABLE = False
         if not BUILD_MODE:
-            print("⚠️ Windows API modules not available - some Windows features disabled")
+            print("Windows API modules not available - some Windows features disabled")
 else:
     WIN32_AVAILABLE = False
 
@@ -170,9 +171,9 @@ UPDATE_CHECK_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 CLIENT_UPDATE_URL = f"{LICENSE_SERVER_URL}/api/client-update-check"  # Updated endpoint
 CONTACT_EMAIL = "halexandros25@gmail.com"
 
-# ===== ENHANCED LOGGING CONFIGURATION =====
+# ===== ENHANCED LOGGING CONFIGURATION WITH UNICODE FIX =====
 class ColoredFormatter(logging.Formatter):
-    """Professional colored console formatter with PyInstaller compatibility"""
+    """Professional colored console formatter with PyInstaller and Unicode compatibility"""
     
     COLORS = {
         'DEBUG': '\033[36m',     # Cyan
@@ -188,13 +189,83 @@ class ColoredFormatter(logging.Formatter):
         try:
             log_color = self.COLORS.get(record.levelname, self.COLORS['ENDC'])
             record.levelname = f"{log_color}{self.COLORS['BOLD']}{record.levelname:8}{self.COLORS['ENDC']}"
-            record.msg = f"{log_color}{record.msg}{self.COLORS['ENDC']}"
+            
+            # Sanitize message for Windows compatibility
+            message = str(record.msg)
+            safe_message = safe_log_message(message)
+            record.msg = f"{log_color}{safe_message}{self.COLORS['ENDC']}"
+            
             return super().format(record)
         except Exception:
             # Fallback for any formatting issues
             return super().format(record)
 
-# Enhanced logging setup with PyInstaller compatibility
+class UnicodeFileHandler(logging.FileHandler):
+    """File handler that properly handles Unicode characters"""
+    
+    def __init__(self, filename, mode='a', encoding='utf-8', delay=False):
+        super().__init__(filename, mode, encoding, delay)
+    
+    def emit(self, record):
+        try:
+            # Sanitize record message before writing to file
+            if hasattr(record, 'msg'):
+                record.msg = safe_log_message(str(record.msg))
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+def safe_log_message(message):
+    """Remove or replace Unicode characters that cause Windows encoding issues"""
+    # Replace problematic emojis with text equivalents for logging
+    emoji_replacements = {
+        '🚫': '[BLOCKED]',
+        '📧': '[EMAIL]',
+        '🔐': '[SECURITY]',
+        '🔍': '[SEARCH]',
+        '✅': '[OK]',
+        '❌': '[ERROR]',
+        '⚠️': '[WARNING]',
+        '🔑': '[KEY]',
+        '📋': '[INFO]',
+        '🔧': '[BUILD]',
+        '🚀': '[START]',
+        '🎉': '[SUCCESS]',
+        '💥': '[CRASH]',
+        '🔄': '[PROCESS]',
+        '📦': '[PACKAGE]',
+        '📊': '[STATS]',
+        '💾': '[SAVE]',
+        '🆕': '[NEW]',
+        '📥': '[DOWNLOAD]',
+        '📁': '[FOLDER]',
+        '🏗️': '[BUILD]',
+        '💻': '[SYSTEM]',
+        '🧠': '[MEMORY]',
+        '💾': '[DISK]',
+        '🖖': '[VERSION]',
+        '🔖': '[TAG]',
+        '🔔': '[NOTIFY]',
+        '📡': '[NETWORK]',
+        '🌐': '[WEB]',
+        '🔮': '[CHECK]',
+        '📈': '[STATS]',
+        '⏰': '[TIME]',
+        '🎯': '[TARGET]',
+        '🛑': '[STOP]',
+        '👋': '[GOODBYE]',
+        '💡': '[TIP]',
+        '📄': '[FILE]',
+        '📂': '[FOLDER]'
+    }
+    
+    safe_message = str(message)
+    for emoji, replacement in emoji_replacements.items():
+        safe_message = safe_message.replace(emoji, replacement)
+    
+    return safe_message
+
+# Enhanced logging setup with Unicode compatibility
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -213,11 +284,12 @@ except Exception:
     ))
 logger.addHandler(console_handler)
 
-# File handler for error logs (skip in build mode)
+# File handler for error logs with Unicode support (skip in build mode)
 if not BUILD_MODE:
     try:
         log_file = Path("pdf_tool.log")
-        file_handler = logging.FileHandler(log_file)
+        # Use custom Unicode file handler
+        file_handler = UnicodeFileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(logging.Formatter(
             '%(asctime)s - %(levelname)s - %(message)s',
@@ -460,35 +532,35 @@ class LicenseValidator:
                     license_key = input("License Key: ").strip().upper()
                     
                     if not license_key:
-                        print("❌ License key cannot be empty. Please try again.")
+                        print("License key cannot be empty. Please try again.")
                         continue
                     
                     if license_key.upper() in ["EXIT", "QUIT"]:
-                        print("👋 Goodbye!")
+                        print("Goodbye!")
                         sys.exit(0)
                     
                     if self._is_valid_license_format(license_key):
                         return license_key
                     else:
-                        print("❌ Invalid license format. Expected: PDFM-XXXX-XXXX-XXXX")
+                        print("Invalid license format. Expected: PDFM-XXXX-XXXX-XXXX")
                         print("   Please check your license key and try again.")
                         try:
                             choice = input("   Press Enter to try again, or type 'exit' to quit: ").strip()
                             if choice.lower() in ['exit', 'quit']:
                                 sys.exit(0)
                         except (KeyboardInterrupt, EOFError):
-                            print("\n👋 Goodbye!")
+                            print("\nGoodbye!")
                             sys.exit(0)
                         continue
                         
                 except KeyboardInterrupt:
-                    print("\n👋 Goodbye!")
+                    print("\nGoodbye!")
                     sys.exit(0)
                 except EOFError:
-                    print("\n👋 Goodbye!")
+                    print("\nGoodbye!")
                     sys.exit(0)
                 except Exception as e:
-                    print(f"❌ Error reading input: {e}")
+                    print(f"Error reading input: {e}")
                     continue
         except Exception as e:
             logger.error(f"License prompt error: {e}")
@@ -621,21 +693,21 @@ class LicenseValidator:
                 except OSError:
                     pass  # Ignore permission errors
             if not BUILD_MODE:
-                logger.debug("💾 License key stored securely")
+                logger.debug("License key stored securely")
         except Exception as e:
             if not BUILD_MODE:
                 logger.error(f"Error storing license: {e}")
     
     async def enforce_license_or_exit(self):
-        """CRITICAL: Enforce license validation - app exits if invalid - PyInstaller compatible"""
+        """CRITICAL: Enforce license validation - app exits if invalid - PyInstaller compatible with Unicode fix"""
         # 🔧 BUILD MODE BYPASS - Only during actual build/CI
         if BUILD_MODE:
-            logger.info("🔧 BUILD MODE: Skipping license validation for build process")
-            logger.info("⚠️ Production executable will require valid license")
+            logger.info("BUILD MODE: Skipping license validation for build process")
+            logger.info("Production executable will require valid license")
             return {"valid": True, "build_mode": True}
         
         try:
-            logger.info(f"🔐 Hardware ID: \033[1m{self.hardware_id}\033[0m")
+            logger.info(f"Hardware ID: {self.hardware_id}")
             
             # Always validate with server - NO OFFLINE MODE
             result = await self.validate_license()
@@ -652,10 +724,10 @@ class LicenseValidator:
                             "33"
                         )
                     else:
-                        logger.info(f"📅 License valid for {days} more days")
+                        logger.info(f"License valid for {days} more days")
                 
                 validation_count = result.get("validation_count", 0)
-                logger.info(f"🔢 Total validations: {validation_count}")
+                logger.info(f"Total validations: {validation_count}")
                 
                 return result
             else:
@@ -663,9 +735,10 @@ class LicenseValidator:
                 
         except SecurityError as e:
             ProfessionalUI.print_status_box("SECURITY ERROR", str(e), "31")
-            logger.error("🚫 APPLICATION CANNOT CONTINUE WITHOUT VALID LICENSE")
-            logger.error(f"📧 Contact for license: {CONTACT_EMAIL}")
-            logger.error(f"🔐 Your Hardware ID: {self.hardware_id}")
+            # Use safe logging messages without emojis to avoid Unicode errors
+            logger.error("APPLICATION CANNOT CONTINUE WITHOUT VALID LICENSE")
+            logger.error(f"Contact for license: {CONTACT_EMAIL}")
+            logger.error(f"Your Hardware ID: {self.hardware_id}")
             
             try:
                 print(f"\n┌{'─' * 60}┐")
@@ -683,7 +756,7 @@ class LicenseValidator:
             sys.exit(1)
         except Exception as e:
             ProfessionalUI.print_status_box("CRITICAL ERROR", str(e), "31")
-            logger.error("🚫 APPLICATION CANNOT CONTINUE")
+            logger.error("APPLICATION CANNOT CONTINUE")
             try:
                 input("\nPress Enter to exit...")
             except (KeyboardInterrupt, EOFError):
@@ -702,22 +775,22 @@ class AutoUpdater:
     async def check_for_updates(self):
         """Check for updates from both license server and GitHub with enhanced integration"""
         if BUILD_MODE:
-            logger.info("🔧 BUILD MODE: Skipping update check")
+            logger.info("BUILD MODE: Skipping update check")
             return {"update_available": False}
             
         try:
-            logger.info("🔄 Checking for updates...")
+            logger.info("Checking for updates...")
             
             # First check license server for immediate updates (higher priority)
             server_update = await self._check_server_updates()
             if server_update.get("update_available"):
-                logger.info("📡 Update found via license server")
+                logger.info("Update found via license server")
                 return server_update
             
             # Fallback to GitHub releases
             github_update = await self._check_github_updates()
             if github_update.get("update_available"):
-                logger.info("📡 Update found via GitHub")
+                logger.info("Update found via GitHub")
                 return github_update
             
             return {"update_available": False}
@@ -746,7 +819,7 @@ class AutoUpdater:
                         if data.get("update_available"):
                             latest_version = data.get("latest_version", "latest").lstrip("v")
                             if self._is_newer_version(latest_version):
-                                logger.info(f"🆕 New version available from server: v{latest_version}")
+                                logger.info(f"New version available from server: v{latest_version}")
                                 return {
                                     "update_available": True,
                                     "latest_version": latest_version,
@@ -772,7 +845,7 @@ class AutoUpdater:
             if 'aiohttp' not in sys.modules:
                 return {"update_available": False}
                 
-            logger.info("📡 Checking GitHub releases...")
+            logger.info("Checking GitHub releases...")
             
             timeout = aiohttp.ClientTimeout(total=10)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -787,7 +860,7 @@ class AutoUpdater:
                         latest_version = release_data.get("tag_name", "").lstrip("v")
                         
                         if self._is_newer_version(latest_version):
-                            logger.info(f"🆕 New version available on GitHub: v{latest_version}")
+                            logger.info(f"New version available on GitHub: v{latest_version}")
                             return {
                                 "update_available": True,
                                 "latest_version": latest_version,
@@ -798,7 +871,7 @@ class AutoUpdater:
                                 "published_at": release_data.get("published_at")
                             }
                         else:
-                            logger.info("✅ You have the latest version")
+                            logger.info("You have the latest version")
                             return {"update_available": False}
                     else:
                         logger.warning(f"Failed to check GitHub updates: HTTP {response.status}")
@@ -859,24 +932,24 @@ class AutoUpdater:
             
             ProfessionalUI.print_section("Update Available", "🆕")
             
-            print(f"📦 New Version: \033[1mv{version}\033[0m (current: {VERSION})")
-            print(f"📡 Source: {source.title()}")
+            print(f"New Version: v{version} (current: {VERSION})")
+            print(f"Source: {source.title()}")
             
             if update_info.get("release_date"):
-                print(f"📅 Release Date: {update_info['release_date']}")
+                print(f"Release Date: {update_info['release_date']}")
             elif update_info.get("published_at"):
-                print(f"📅 Published: {update_info['published_at']}")
+                print(f"Published: {update_info['published_at']}")
             
             if update_info.get("filename"):
-                print(f"📄 Filename: {update_info['filename']}")
+                print(f"Filename: {update_info['filename']}")
             
             if update_info.get("release_notes"):
                 notes = update_info["release_notes"]
-                print(f"📝 Release Notes:\n{notes[:300]}{'...' if len(notes) > 300 else ''}")
+                print(f"Release Notes:\n{notes[:300]}{'...' if len(notes) > 300 else ''}")
             
             print()
             try:
-                choice = input("🔄 Download and install update now? (y/N): ").strip().lower()
+                choice = input("Download and install update now? (y/N): ").strip().lower()
             except (KeyboardInterrupt, EOFError):
                 choice = "n"
             
@@ -884,7 +957,7 @@ class AutoUpdater:
                 download_url = update_info["download_url"]
                 await self.download_and_install_update(download_url, version)
             else:
-                logger.info("⏭️ Update skipped - continuing with current version")
+                logger.info("Update skipped - continuing with current version")
         except Exception as e:
             logger.error(f"Update prompt error: {e}")
 
@@ -895,8 +968,8 @@ class AutoUpdater:
             
         try:
             ProfessionalUI.print_section("Downloading Update", "📥")
-            logger.info(f"📥 Downloading v{version}...")
-            logger.info(f"🔗 URL: {download_url}")
+            logger.info(f"Downloading v{version}...")
+            logger.info(f"URL: {download_url}")
             
             # Create temp directory
             temp_dir = Path(tempfile.mkdtemp())
@@ -936,7 +1009,7 @@ class AutoUpdater:
                                         downloaded, total_size, "Download"
                                     )
                         
-                        logger.info("✅ Download completed successfully")
+                        logger.info("Download completed successfully")
                         
                         # Install update
                         await self._install_update(download_path, version)
@@ -944,7 +1017,7 @@ class AutoUpdater:
                         raise Exception(f"Download failed: HTTP {response.status}")
                         
         except Exception as e:
-            logger.error(f"❌ Update download failed: {e}")
+            logger.error(f"Update download failed: {e}")
     
     async def _install_update(self, download_path, version):
         """Install the downloaded update with enhanced error handling and PyInstaller support"""
@@ -956,13 +1029,13 @@ class AutoUpdater:
             
             if download_path.suffix == '.exe':
                 # Direct executable replacement
-                logger.info("🔄 Installing update...")
+                logger.info("Installing update...")
                 
                 # Backup current version
                 if current_exe.exists():
                     try:
                         shutil.copy2(current_exe, backup_exe)
-                        logger.info("💾 Current version backed up")
+                        logger.info("Current version backed up")
                     except Exception as e:
                         logger.warning(f"Backup failed: {e}")
                 
@@ -975,7 +1048,7 @@ class AutoUpdater:
                     "32"
                 )
                 
-                logger.info("🔄 Restarting application...")
+                logger.info("Restarting application...")
                 await asyncio.sleep(2)
                 
                 # Restart application
@@ -991,7 +1064,7 @@ class AutoUpdater:
                 
             else:
                 # Handle zip file
-                logger.info("📦 Extracting update package...")
+                logger.info("Extracting update package...")
                 
                 with zipfile.ZipFile(download_path, 'r') as zip_ref:
                     extract_dir = download_path.parent / "extracted"
@@ -1004,7 +1077,7 @@ class AutoUpdater:
                             if current_exe.exists():
                                 try:
                                     shutil.copy2(current_exe, backup_exe)
-                                    logger.info("💾 Current version backed up")
+                                    logger.info("Current version backed up")
                                 except Exception as e:
                                     logger.warning(f"Backup failed: {e}")
                             
@@ -1016,7 +1089,7 @@ class AutoUpdater:
                                 "32"
                             )
                             
-                            logger.info("🔄 Restarting application...")
+                            logger.info("Restarting application...")
                             await asyncio.sleep(2)
                             try:
                                 if platform.system() == "Windows":
@@ -1029,10 +1102,10 @@ class AutoUpdater:
                                 logger.info("Please manually restart the application")
                             break
                     else:
-                        logger.error("❌ No executable found in update package")
+                        logger.error("No executable found in update package")
                         
         except Exception as e:
-            logger.error(f"❌ Update installation failed: {e}")
+            logger.error(f"Update installation failed: {e}")
 
 class PDFProcessor:
     """Professional PDF metadata processing engine with PyInstaller compatibility"""
@@ -1073,7 +1146,7 @@ class PDFProcessor:
                     f"No PDF files found in '{self.original_dir}'", 
                     "33"
                 )
-                logger.info(f"📂 Please place your PDF files in: {self.original_dir}")
+                logger.info(f"Please place your PDF files in: {self.original_dir}")
                 return False
             
             self.stats['total_files'] = len(pdf_files)
@@ -1083,15 +1156,15 @@ class PDFProcessor:
                 self.stats['total_size'] = 0
             
             ProfessionalUI.print_section("Processing PDF Files", "📄")
-            logger.info(f"📄 Found {len(pdf_files)} PDF files to process")
-            logger.info(f"📊 Total size: {self._format_size(self.stats['total_size'])}")
+            logger.info(f"Found {len(pdf_files)} PDF files to process")
+            logger.info(f"Total size: {self._format_size(self.stats['total_size'])}")
             
             start_time = time.time()
             
             # Process files with progress tracking
             for i, pdf_file in enumerate(pdf_files, 1):
                 try:
-                    logger.info(f"🔄 Processing: {pdf_file.name}")
+                    logger.info(f"Processing: {pdf_file.name}")
                     
                     # Update progress
                     ProfessionalUI.print_progress_bar(
@@ -1108,10 +1181,10 @@ class PDFProcessor:
                         i, len(pdf_files), "Processing"
                     )
                     
-                    logger.info(f"✅ Completed: {pdf_file.name}")
+                    logger.info(f"Completed: {pdf_file.name}")
                     
                 except Exception as e:
-                    logger.error(f"❌ Failed to process {pdf_file.name}: {e}")
+                    logger.error(f"Failed to process {pdf_file.name}: {e}")
                     self.stats['failed_files'] += 1
             
             self.stats['processing_time'] = time.time() - start_time
@@ -1122,7 +1195,7 @@ class PDFProcessor:
             return True
             
         except Exception as e:
-            logger.error(f"❌ PDF processing error: {e}")
+            logger.error(f"PDF processing error: {e}")
             return False
     
     async def _process_single_pdf(self, pdf_file):
@@ -1161,7 +1234,7 @@ class PDFProcessor:
         try:
             ProfessionalUI.print_section("Processing Complete", "🎉")
             
-            print(f"📊 Processing Statistics:")
+            print(f"Processing Statistics:")
             print(f"   • Total files: {self.stats['total_files']}")
             print(f"   • Successfully processed: {self.stats['processed_files']}")
             print(f"   • Failed: {self.stats['failed_files']}")
@@ -1197,7 +1270,7 @@ class PDFMetadataTool:
     def _setup_signal_handlers(self):
         """Setup graceful shutdown handlers with enhanced error handling"""
         def signal_handler(signum, frame):
-            logger.info("\n🛑 Graceful shutdown requested")
+            logger.info("\nGraceful shutdown requested")
             sys.exit(0)
         
         try:
@@ -1215,9 +1288,9 @@ class PDFMetadataTool:
             ProfessionalUI.print_header()
             
             # Display version and build information
-            logger.info(f"🔖 Version: {VERSION}")
+            logger.info(f"Version: {VERSION}")
             if hasattr(sys, 'frozen') and sys.frozen:
-                logger.info("🏗️ Running as compiled executable")
+                logger.info("Running as compiled executable")
             
             # CRITICAL: License validation first
             license_result = await self.validator.enforce_license_or_exit()
@@ -1239,18 +1312,18 @@ class PDFMetadataTool:
                     "Application structure validated for PyInstaller build", 
                     "33"
                 )
-                logger.info("✅ Ready for PyInstaller build process")
-                logger.info("⚠️ Final executable will require valid license")
+                logger.info("Ready for PyInstaller build process")
+                logger.info("Final executable will require valid license")
                 return
             
             # Run main processing
             success = await self.processor.process_pdf_files()
             
             if success:
-                logger.info("🎉 All processing completed successfully!")
-                print(f"\n📂 Processed files are available in: {self.processor.processed_dir}")
+                logger.info("All processing completed successfully!")
+                print(f"\nProcessed files are available in: {self.processor.processed_dir}")
             else:
-                logger.warning("⚠️ Processing completed with issues")
+                logger.warning("Processing completed with issues")
             
             # Wait for update check to complete if it was started
             try:
@@ -1262,10 +1335,10 @@ class PDFMetadataTool:
                 logger.debug(f"Update check error: {e}")
             
         except KeyboardInterrupt:
-            logger.info("\n🛑 Application stopped by user")
+            logger.info("\nApplication stopped by user")
             sys.exit(0)
         except Exception as e:
-            logger.error(f"💥 Critical error: {e}")
+            logger.error(f"Critical error: {e}")
             if not BUILD_MODE:
                 try:
                     input("\nPress Enter to exit...")
@@ -1281,23 +1354,23 @@ class PDFMetadataTool:
             # Python version check
             try:
                 python_version = platform.python_version()
-                logger.info(f"🐍 Python Version: {python_version}")
+                logger.info(f"Python Version: {python_version}")
             except Exception:
-                logger.info("🐍 Python Version: Unknown")
+                logger.info("Python Version: Unknown")
             
             # Platform information
             try:
-                logger.info(f"💻 Platform: {platform.system()} {platform.release()}")
-                logger.info(f"🏗️ Architecture: {platform.machine()}")
+                logger.info(f"Platform: {platform.system()} {platform.release()}")
+                logger.info(f"Architecture: {platform.machine()}")
             except Exception:
-                logger.info("💻 Platform: Unknown")
+                logger.info("Platform: Unknown")
             
             # Memory check (if psutil available)
             if PSUTIL_AVAILABLE:
                 try:
                     import psutil
                     memory = psutil.virtual_memory()
-                    logger.info(f"🧠 Available Memory: {self._format_size(memory.available)}")
+                    logger.info(f"Available Memory: {self._format_size(memory.available)}")
                 except Exception as e:
                     logger.debug(f"Memory check failed: {e}")
             
@@ -1305,17 +1378,17 @@ class PDFMetadataTool:
             try:
                 disk_usage = shutil.disk_usage(self.base_dir)
                 free_space = disk_usage.free
-                logger.info(f"💾 Free Disk Space: {self._format_size(free_space)}")
+                logger.info(f"Free Disk Space: {self._format_size(free_space)}")
                 
                 if free_space < 100 * 1024 * 1024:  # Less than 100MB
-                    logger.warning("⚠️ Low disk space detected")
+                    logger.warning("Low disk space detected")
             except Exception as e:
                 logger.debug(f"Could not check disk space: {e}")
             
             # Directory permissions check
             self._check_directory_permissions()
             
-            logger.info("✅ System requirements check complete")
+            logger.info("System requirements check complete")
         except Exception as e:
             logger.error(f"System check error: {e}")
     
@@ -1334,9 +1407,9 @@ class PDFMetadataTool:
                 test_file.write_text("test", encoding='utf-8')
                 test_file.unlink()
                 if not BUILD_MODE:
-                    logger.debug(f"✅ Directory writable: {directory}")
+                    logger.debug(f"Directory writable: {directory}")
             except Exception as e:
-                logger.error(f"❌ Directory permission error for {directory}: {e}")
+                logger.error(f"Directory permission error for {directory}: {e}")
     
     def _format_size(self, size_bytes):
         """Format file size in human-readable format"""
@@ -1371,10 +1444,10 @@ async def main():
         await tool.run()
         
     except KeyboardInterrupt:
-        logger.info("\n👋 Goodbye!")
+        logger.info("\nGoodbye!")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"💥 Application failed: {e}")
+        logger.error(f"Application failed: {e}")
         if not BUILD_MODE:
             try:
                 input("\nPress Enter to exit...")
@@ -1406,10 +1479,10 @@ if __name__ == "__main__":
         asyncio.run(main())
         
     except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
+        print("\nGoodbye!")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"💥 Fatal error: {e}")
+        logger.error(f"Fatal error: {e}")
         if not BUILD_MODE:
             try:
                 input("\nPress Enter to exit...")
