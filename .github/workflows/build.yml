@@ -36,30 +36,58 @@ jobs:
         
         echo "✅ All dependencies installed successfully"
 
+    - name: Verify client.py exists
+      run: |
+        if (Test-Path "client.py") {
+          echo "✅ client.py found"
+          $size = (Get-Item "client.py").Length
+          echo "📄 File size: $([math]::Round($size / 1KB, 2)) KB"
+        } else {
+          echo "❌ client.py not found!"
+          echo "📁 Current directory contents:"
+          Get-ChildItem
+          exit 1
+        }
+      shell: pwsh
+
     - name: Generate version
       id: version
       run: |
         if ("${{ github.event.inputs.version }}" -ne "") {
           echo "VERSION=${{ github.event.inputs.version }}" >> $env:GITHUB_OUTPUT
+          echo "🏷️ Using manual version: ${{ github.event.inputs.version }}"
         } else {
           $date = Get-Date -Format "yyyy.MM.dd"
           $run = "${{ github.run_number }}"
-          echo "VERSION=v$date.$run" >> $env:GITHUB_OUTPUT
+          $version = "v$date.$run"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+          echo "🏷️ Auto-generated version: $version"
         }
-        
-        echo "🏷️ Building version: $($env:VERSION)"
       shell: pwsh
 
     - name: Update version in client.py
       run: |
         if (Test-Path "client.py") {
-          $content = Get-Content client.py -Raw
+          $content = Get-Content client.py -Raw -Encoding UTF8
+          
+          # Show current version before update
+          if ($content -match 'VERSION\s*=\s*"([^"]*)"') {
+            echo "📋 Current version in file: $($matches[1])"
+          }
+          
+          # Update version strings
           $content = $content -replace 'VERSION\s*=\s*"[^"]*"', 'VERSION = "${{ steps.version.outputs.VERSION }}"'
           $content = $content -replace '__version__\s*=\s*"[^"]*"', '__version__ = "${{ steps.version.outputs.VERSION }}"'
-          Set-Content client.py $content
-          echo "✅ Version updated in client.py"
+          
+          Set-Content client.py $content -Encoding UTF8
+          
+          # Verify update
+          $updatedContent = Get-Content client.py -Raw -Encoding UTF8
+          if ($updatedContent -match 'VERSION\s*=\s*"([^"]*)"') {
+            echo "✅ Updated version in file: $($matches[1])"
+          }
         } else {
-          echo "❌ client.py not found!"
+          echo "❌ client.py not found for version update!"
           exit 1
         }
       shell: pwsh
@@ -67,9 +95,15 @@ jobs:
     - name: Build EXE with PyInstaller
       run: |
         echo "🚀 Building executable..."
+        echo "📋 PyInstaller version:"
+        pyinstaller --version
         
+        $exeName = "PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}"
+        echo "🏗️ Building: $exeName"
+        
+        # Build with detailed output
         pyinstaller --onefile `
-          --name "PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}" `
+          --name $exeName `
           --windowed `
           --hidden-import=aiohttp `
           --hidden-import=aiofiles `
@@ -91,33 +125,55 @@ jobs:
           --hidden-import=certifi `
           --collect-submodules=cryptography `
           --collect-submodules=win32api `
+          --console `
           client.py
           
+        if ($LASTEXITCODE -ne 0) {
+          echo "❌ PyInstaller failed with exit code: $LASTEXITCODE"
+          exit 1
+        }
+        
         # Verify build succeeded
-        $exe_path = "dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
-        if (Test-Path $exe_path) {
-          $size = (Get-Item $exe_path).Length
+        $exePath = "dist/$exeName.exe"
+        if (Test-Path $exePath) {
+          $size = (Get-Item $exePath).Length
           $sizeMB = [math]::Round($size / 1MB, 2)
-          echo "✅ Build successful! File size: $sizeMB MB"
+          echo "✅ Build successful! File: $exePath"
+          echo "📊 File size: $sizeMB MB"
         } else {
           echo "❌ Build failed - executable not found!"
+          echo "📁 Contents of dist directory:"
+          if (Test-Path "dist") {
+            Get-ChildItem "dist"
+          } else {
+            echo "dist directory does not exist"
+          }
           exit 1
         }
       shell: pwsh
 
     - name: Test executable
       run: |
-        $exe_path = "dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
+        $exePath = "dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe"
         
-        if (Test-Path $exe_path) {
+        if (Test-Path $exePath) {
           # Test that the file is a valid PE executable
-          $signature = Get-Content $exe_path -Encoding Byte -TotalCount 2
+          $signature = Get-Content $exePath -Encoding Byte -TotalCount 2
           if ($signature[0] -eq 77 -and $signature[1] -eq 90) {
             echo "✅ Valid executable format confirmed"
           } else {
             echo "❌ Invalid executable format"
             exit 1
           }
+          
+          # Additional file verification
+          $fileInfo = Get-Item $exePath
+          echo "📋 File details:"
+          echo "   Size: $([math]::Round($fileInfo.Length / 1MB, 2)) MB"
+          echo "   Created: $($fileInfo.CreationTime)"
+        } else {
+          echo "❌ Executable not found for testing!"
+          exit 1
         }
       shell: pwsh
 
@@ -137,6 +193,7 @@ jobs:
           - **Built on:** ${{ github.event.head_commit.timestamp }}
           - **Commit:** [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }})
           - **Build #:** ${{ github.run_number }}
+          - **Trigger:** ${{ github.event_name }}
           
           ### 🔧 Installation Instructions
           1. 📥 Download the executable file below
@@ -189,7 +246,7 @@ jobs:
         
         # Backup/alternative server URLs (customize these)
         $notification_endpoints += @(
-          "https://pdf-license-server.onrender.com/api/release-notification"
+          "https://pdf-license-server-dmyx.onrender.com/api/release-notification"
         )
         
         $headers = @{
