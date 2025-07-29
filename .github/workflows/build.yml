@@ -13,12 +13,18 @@ on:
         required: false
         default: ''
 
+# Add permissions for GitHub token
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4  # Updated to v4
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -119,7 +125,6 @@ jobs:
           --hidden-import=win32file `
           --hidden-import=win32security `
           --hidden-import=PIL `
-          --hidden-import=pypdf2 `
           --hidden-import=fitz `
           --hidden-import=urllib3 `
           --hidden-import=certifi `
@@ -193,12 +198,10 @@ jobs:
 
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v1  # Modern, maintained alternative
       with:
         tag_name: ${{ steps.version.outputs.VERSION }}
-        release_name: PDF Metadata Tool ${{ steps.version.outputs.VERSION }}
+        name: PDF Metadata Tool ${{ steps.version.outputs.VERSION }}
         body: |
           ## 🚀 PDF Metadata Tool ${{ steps.version.outputs.VERSION }}
           
@@ -225,18 +228,11 @@ jobs:
           
           ### 📞 Support
           For technical support or license issues, please contact your license provider or visit the license management portal.
+        files: ./dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe
         draft: false
         prerelease: false
-
-    - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ./dist/PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe
-        asset_name: PDF-Metadata-Tool-${{ steps.version.outputs.VERSION }}.exe
-        asset_content_type: application/octet-stream
 
     - name: Notify License Server
       run: |
