@@ -105,6 +105,9 @@ INITIALIZATION_ATTEMPTS = 0
 MAX_INITIALIZATION_ATTEMPTS = 3
 FIRST_REQUEST_HANDLED = False
 
+# Track actual database type in use (updated based on successful connections)
+ACTUAL_DB_TYPE = None  # Will be 'postgresql' or 'sqlite'
+
 # =============================================================================
 # GITHUB INTEGRATION CLASS
 # =============================================================================
@@ -292,24 +295,29 @@ app.jinja_env.globals.update({
 
 def get_db_connection():
     """Get database connection - PostgreSQL for Render, SQLite for local/fallback"""
+    global ACTUAL_DB_TYPE
+    
     if DATABASE_URL and PSYCOPG2_AVAILABLE:
         try:
             conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+            ACTUAL_DB_TYPE = 'postgresql'
             return conn
         except Exception as e:
             logger.error(f"PostgreSQL connection failed: {e}, falling back to SQLite")
+            ACTUAL_DB_TYPE = 'sqlite'
             conn = sqlite3.connect('licenses.db')
             conn.row_factory = sqlite3.Row
             return conn
     else:
         # SQLite for local development or when psycopg2 not available
+        ACTUAL_DB_TYPE = 'sqlite'
         conn = sqlite3.connect('licenses.db')
         conn.row_factory = sqlite3.Row
         return conn
 
 def is_postgresql():
-    """Check if we're using PostgreSQL"""
-    return DATABASE_URL and PSYCOPG2_AVAILABLE
+    """Check if we're using PostgreSQL (based on actual connection type)"""
+    return ACTUAL_DB_TYPE == 'postgresql'
 
 def check_table_exists(table_name):
     """Check if a specific table exists in the database"""
