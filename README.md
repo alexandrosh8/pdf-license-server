@@ -1,15 +1,15 @@
-# PDF Metadata Tool - License Server
+# PDF License Server - Admin Only
 
-🔐 A Flask-based license validation server for the PDF Metadata Tool application.
+🔐 A Flask-based license validation server for the PDF Metadata Processor EXE application.
 
 ## Features
 
-- **Monthly License System**: $9.99/month automatic licensing
+- **Admin-Only Interface**: No public access - admin panel only
+- **License Management**: Complete CRUD operations for license keys
 - **Hardware Binding**: Licenses locked to specific computers for security
-- **Online Validation**: Real-time license verification
-- **Admin Panel**: Complete license management interface
-- **SQLite Database**: Self-contained database (no external dependencies)
-- **Renewal System**: Easy license renewal process
+- **EXE Client Validation**: Real-time license verification for standalone client
+- **Local Testing**: Easy local development setup
+- **GitHub Integration**: Automated client build and deployment system
 
 ## Deployment
 
@@ -22,12 +22,15 @@
    - Choose "Web Service" → Connect this repository
 3. **Configure Settings**:
    - Language: Python
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `python app.py`
+   - Build Command: `pip install --upgrade pip && pip install -r requirements.txt`
+   - Start Command: `gunicorn server:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120`
    - Instance Type: Free
 4. **Add Environment Variables**:
-   - `SECRET_KEY`: your-random-secret-key-here
-   - `FLASK_ENV`: production
+   - `ADMIN_USERNAME`: your-admin-username
+   - `ADMIN_PASSWORD`: your-secure-admin-password
+   - `SECRET_KEY`: (auto-generated)
+   - `GITHUB_TOKEN`: (optional - for automated builds)
+   - `GITHUB_REPO`: your-username/your-repo-name
 5. **Deploy**: Click "Create Web Service"
 
 Your license server will be available at: `https://your-app-name.onrender.com`
@@ -82,6 +85,16 @@ Content-Type: application/json
 
 ## Local Development
 
+### Option 1: Use Provided Scripts
+```bash
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File run_local_server.ps1
+
+# Windows (Command Prompt)
+run_local_server.bat
+```
+
+### Option 2: Manual Setup
 ```bash
 # Clone repository
 git clone https://github.com/your-username/pdf-license-server.git
@@ -90,81 +103,82 @@ cd pdf-license-server
 # Install dependencies
 pip install -r requirements.txt
 
+# Set environment variables
+set ADMIN_USERNAME=admin
+set ADMIN_PASSWORD=admin123
+set FLASK_ENV=development
+
 # Run development server
-python app.py
+python server.py
 ```
 
-Visit `http://localhost:5000` to test locally.
+Visit `http://localhost:5000/admin` to access the admin panel.
+- Username: admin
+- Password: admin123
 
 ## Configuration
 
 ### Environment Variables
-- `SECRET_KEY`: Flask secret key for sessions (required)
-- `FLASK_ENV`: Set to "production" for deployment
-- `PORT`: Server port (automatically set by hosting platforms)
+- `ADMIN_USERNAME`: Admin panel username (required)
+- `ADMIN_PASSWORD`: Admin panel password (required)
+- `SECRET_KEY`: Flask secret key for sessions (auto-generated)
+- `GITHUB_TOKEN`: GitHub Personal Access Token (optional)
+- `GITHUB_REPO`: GitHub repository for auto-builds (optional)
+- `DATABASE_URL`: PostgreSQL connection (uses SQLite if not set)
 
 ### Customization
-- **Pricing**: Change price in HTML templates and validation logic
-- **License Duration**: Modify `timedelta(days=30)` in `create_monthly_license()`
+- **License Duration**: Modify `timedelta(days=30)` in license creation
 - **License Format**: Update `generate_license_key()` function
 - **UI/Styling**: Modify HTML templates with custom CSS
+
+## EXE Client Distribution
+
+This server works with the standalone PDF Metadata Processor EXE client:
+
+1. **Build EXE**: Use `build_client.py` to create standalone executable
+2. **Distribute**: Send EXE file to customers
+3. **License Keys**: Generate license keys via admin panel
+4. **Validation**: EXE validates with server automatically
+
+### Client Features:
+- **Trial System**: 1 free use without license
+- **License Validation**: Real-time server verification
+- **Offline Caching**: Works when server temporarily unavailable
+- **Timestamp Preservation**: Perfect file date/time maintenance
 
 ## Security Features
 
 - **Hardware Binding**: Prevents license sharing between computers
+- **Admin Authentication**: Basic HTTP auth for admin panel
 - **Encrypted Keys**: License keys use cryptographically secure generation
 - **Rate Limiting**: Built-in protection against validation spam
 - **Audit Logging**: All validation attempts logged with timestamps
-- **SQLite Security**: Database file permissions managed automatically
 
-## Payment Integration
+## File Structure
 
-To add real payment processing, integrate with:
-
-### Stripe (Recommended)
-```python
-import stripe
-stripe.api_key = "sk_live_your_stripe_secret_key"
-
-# Add webhook handler for successful payments
-@app.route('/webhook/stripe', methods=['POST'])
-def stripe_webhook():
-    # Verify webhook signature
-    # Create license on successful payment
-    # Send license key via email
+```
+pdf-license-server/
+├── server.py              # Main admin server
+├── server_extensions.py   # Build system extensions  
+├── client.py              # Standalone EXE client source
+├── build_client.py        # EXE build script
+├── requirements.txt       # Server dependencies
+├── client_requirements.txt # Client dependencies
+├── render.yaml           # Render deployment config
+├── gunicorn.conf.py      # Production server config
+├── run_local_server.ps1  # Local testing (PowerShell)
+├── run_local_server.bat  # Local testing (Batch)
+└── CLIENT_BUILD_GUIDE.md # EXE build instructions
 ```
 
-### PayPal
-```python
-# Use PayPal SDK for payment processing
-# Handle IPN (Instant Payment Notifications)
-# Create licenses on verified payments
-```
+## Support
 
-## Monitoring & Analytics
-
-- **License Usage**: Track active vs expired licenses in admin panel
-- **Validation Patterns**: Monitor validation frequency and failures
-- **Customer Insights**: View license creation and renewal trends
-- **Health Monitoring**: Use `/health` endpoint for uptime monitoring
-
-## Support & Maintenance
-
-- **Database Backups**: Regularly backup SQLite database file
-- **Log Monitoring**: Monitor application logs for errors
-- **Performance**: Consider PostgreSQL for high-traffic deployments
-- **Updates**: Keep Flask and dependencies updated for security
-
-## License
-
-This software is proprietary. All rights reserved.
-
-## Contact
-
-For technical support or business inquiries:
-- Email: support@your-domain.com  
-- Website: https://your-website.com
+For issues or questions:
+1. Check the admin panel logs
+2. Verify environment variables are set correctly
+3. Test license validation endpoints manually
+4. Review client build guide for EXE distribution
 
 ---
 
-**Built with Flask • Deployed on Render • Secured with Hardware Binding**
+**PDF License Server** - Admin-only license management for EXE client distribution.

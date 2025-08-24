@@ -1129,6 +1129,11 @@ def validate_license():
             "message": "Please try again later"
         }), 500
 
+@app.route('/api/validate-license', methods=['POST'])
+def validate_license_alias():
+    """Alias for validate_license - matches client.py expectations"""
+    return validate_license()
+
 @app.route('/health')
 def health_check():
     """Enhanced health check endpoint with comprehensive diagnostics"""
@@ -1267,14 +1272,8 @@ def get_database_status():
 
 @app.route('/')
 def index():
-    """Enhanced main page with GitHub status"""
-    ensure_database_ready()
-    github_configured = bool(GITHUB_TOKEN and GITHUB_REPO)
-    return render_template_string(ENHANCED_INDEX_HTML, 
-                                database_status=DATABASE_INITIALIZED,
-                                initialization_attempts=INITIALIZATION_ATTEMPTS,
-                                github_configured=github_configured,
-                                github_repo=GITHUB_REPO if github_configured else "Not configured")
+    """Redirect root to admin panel - no public client interface"""
+    return redirect('/admin')
 
 @app.route('/admin')
 @require_auth
@@ -1632,7 +1631,9 @@ def log_admin_session(username, ip_address):
 # HTML TEMPLATES
 # =============================================================================
 
-ENHANCED_INDEX_HTML = '''
+# CLIENT INTERFACE TEMPLATE REMOVED - SERVER IS NOW ADMIN-ONLY
+# Original template removed to save space since root route now redirects to admin
+ENHANCED_INDEX_HTML_DEPRECATED = '''
 <!DOCTYPE html>
 <html lang="en">
 <head>

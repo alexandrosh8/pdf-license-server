@@ -181,9 +181,8 @@ class TimestampPreserver:
             # On Windows, try to set creation time
             if platform.system() == "Windows":
                 try:
-                    import win32file
-                    import win32con
-                    from win32_setctime import setctime
+                    # Try using win32_setctime package (optional dependency)
+                    from win32_setctime import setctime  # type: ignore
                     setctime(filepath, times['created'])
                 except ImportError:
                     # Fallback: use subprocess with powershell
