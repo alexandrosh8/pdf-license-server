@@ -1,0 +1,18 @@
+# PDF Metadata Processor Client Requirements
+# ==========================================
+
+# Core PDF processing
+pikepdf>=9.0.0              # PDF manipulation and metadata
+requests>=2.31.0             # HTTP requests for license validation
+
+# Windows-specific (for timestamp preservation)
+pywin32>=306                 # Windows API access
+win32-setctime>=1.1.0        # Creation time setting
+
+# Build tools (for creating EXE)
+pyinstaller>=6.0.0           # EXE creation
+setuptools>=68.0.0           # Build tools
+
+# Optional enhancements
+certifi>=2023.7.22          # SSL certificates
+urllib3>=2.0.0              # HTTP library
