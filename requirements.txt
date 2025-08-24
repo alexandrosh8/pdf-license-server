@@ -1,0 +1,80 @@
+# PDF License Server v6.1.0 - Enhanced Professional Edition
+# Requirements for Flask 3.0+ with GitHub Integration and Auto-Deploy
+
+# Core Framework
+Flask>=3.0.0
+Werkzeug>=3.0.0
+Jinja2>=3.1.0
+itsdangerous>=2.1.0
+click>=8.1.0
+
+# PDF Processing (for app.py)
+pikepdf>=8.0.0
+PyMuPDF>=1.23.0
+python-dateutil>=2.8.0
+
+# Database Support
+psycopg2-binary>=2.9.7          # PostgreSQL adapter (includes precompiled binaries)
+
+# HTTP Client for GitHub Integration
+requests>=2.31.0                # GitHub API communication
+urllib3>=2.0.0                   # HTTP library
+
+# Async HTTP for Client Auto-Updates
+aiohttp>=3.9.0                  # Async HTTP client/server
+aiofiles>=23.2.0                # Async file operations
+
+# Security and Cryptography
+cryptography>=41.0.0            # Encryption and secure token generation
+bcrypt>=4.0.0                   # Password hashing (if needed)
+
+# Utilities
+python-dotenv>=1.0.0            # Environment variable management
+pathlib>=1.0.0                  # Path manipulation (Python 3.4+)
+
+# Date and Time
+python-dateutil>=2.8.0         # Enhanced date parsing
+
+# JSON and Data Processing
+ujson>=5.8.0                    # Fast JSON processing (optional optimization)
+
+# Production Server Support
+gunicorn>=21.2.0                # WSGI HTTP Server for production
+eventlet>=0.33.0                # Concurrent networking library
+
+# Build System Support
+PyYAML>=6.0                     # YAML processing for GitHub Actions
+
+# Development and Testing (Optional)
+pytest>=7.4.0                  # Testing framework
+pytest-asyncio>=0.21.0         # Async testing support
+pytest-cov>=4.1.0              # Coverage reporting
+
+# Monitoring and Logging
+structlog>=23.2.0               # Structured logging (optional)
+
+# File Upload Support
+python-magic>=0.4.27           # File type detection
+pillow>=10.0.0                  # Image processing (for icons)
+
+# PDF Processing Dependencies (for client)
+# Note: These are included for completeness but may not be needed on server
+# pikepdf>=8.0.0                # PDF manipulation
+# PyMuPDF>=1.23.0              # PDF processing alternative
+
+# Windows-specific dependencies (for PyInstaller)
+# pywin32>=306                  # Windows API access (Windows only)
+# pyinstaller>=6.0.0           # Executable building
+
+# Optional Performance Optimizations
+# redis>=5.0.0                 # Caching layer
+# celery>=5.3.0                # Task queue for background jobs
+
+# Development Tools (Optional)
+# black>=23.0.0                # Code formatting
+# flake8>=6.0.0                # Code linting
+# mypy>=1.5.0                  # Type checking
+
+# Note: Some packages may have platform-specific requirements
+# Install with: pip install -r requirements.txt
+# For production: pip install -r requirements.txt --no-dev
